@@ -1,0 +1,730 @@
+/**
+ * Tool handlers: a thin, task-shaped client of the Satori v2 API. Each returns a plain object;
+ * API/auth failures become small error objects (see `safe`) instead of protocol errors.
+ *
+ * stdout is the protocol channel. Nothing in here may print to it.
+ */
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { extname, join, resolve } from "node:path";
+import { performance } from "node:perf_hooks";
+import { setTimeout as sleep } from "node:timers/promises";
+import { client, playbooksClient } from "./api.js";
+import { makeBundle, uploadBundle } from "./bundle.js";
+import { config } from "./config.js";
+import { DOCS_URL, reportUrl } from "./constants.js";
+import { ApiTimeoutError, AuthError, HttpStatusError, SatoriError } from "./errors.js";
+import { cloneRepo, requireGit } from "./git.js";
+import { runLocalJob } from "./local/localRun.js";
+import { loadExecutionOutputs, runTestFilter } from "./outputs.js";
+import { pyRepr, pyTuple } from "./pyrepr.js";
+import * as recommend from "./recommend.js";
+import { isGithubRepo, wildcardOwner } from "./repo.js";
+import { normalizeSeverities } from "./severity.js";
+import * as shaping from "./shaping.js";
+
+type Dict = Record<string, any>;
+
+export const DOC_MAX_CHARS = 30_000;
+export const DOC_PAGES: Record<string, string> = {
+  language: "playbooks/language",
+  asserts: "playbooks/asserts",
+  inputs: "playbooks/inputs",
+  settings: "playbooks/settings",
+  execution: "playbooks/execution",
+  "tool-output": "playbooks/tool-output",
+};
+
+export const REPORT_STATUSES = ["PASS", "FAIL"];
+export const JOB_TYPES = ["RUN", "SCAN", "MONITOR", "GITHUB", "LOCAL"];
+export const VISIBILITIES = ["PUBLIC", "PRIVATE", "UNLISTED"];
+export const FINDING_STATUSES = ["OPEN", "INVESTIGATING", "TP", "FIXED", "FP", "ACCEPTED"];
+export const LISTABLE_JOB_TYPES = ["RUN", "SCAN", "MONITOR"];
+export const FINDING_SOURCES = ["ASSERT", "TOOL"];
+export const ORDERS = ["ASC", "DESC"];
+export const ADVISORY_KINDS = ["SECURITY_ADVISORY", "ISSUE"];
+export const ADVISORY_PROVIDERS = ["GITHUB"];
+export const MAX_SCAN_QUANTITY = 10;
+export const LOCAL_DEFAULT_TIMEOUT = 300;
+export const LOCAL_MAX_TIMEOUT = 3600;
+
+/** Indirection so tests can skip real waits and fake the local runner. */
+export const deps = {
+  sleep: (ms: number) => sleep(ms),
+  now: () => performance.now(),
+  runLocalJob,
+  loadExecutionOutputs,
+};
+
+const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(value, max));
+const oneOf = (name: string, values: string[]) => ({ error: `${name} must be one of ${pyTuple(values)}` });
+
+function expandUser(path: string): string {
+  return path === "~" || path.startsWith("~/") ? join(homedir(), path.slice(1)) : path;
+}
+
+const isDir = (path: string) => existsSync(path) && statSync(path).isDirectory();
+const isFile = (path: string) => existsSync(path) && statSync(path).isFile();
+
+export function errorResult(e: unknown): Dict | null {
+  if (e instanceof AuthError) return { error: "Not logged in. Run: satori-v2 config token <token>" };
+  if (e instanceof HttpStatusError) {
+    const result: Dict = { error: shaping.clip(e.text, 2000), status: e.status };
+    if (e.status === 403) result.hint = "This action needs a PRO or ENTERPRISE plan.";
+    return result;
+  }
+  if (e instanceof ApiTimeoutError) return { error: "Request to the Satori API timed out." };
+  if (e instanceof SatoriError) return { error: e.message };
+  return null;
+}
+
+/** Turn API/auth failures into small error objects instead of protocol errors. */
+export function safe<A extends unknown[]>(fn: (...args: A) => Promise<Dict>): (...args: A) => Promise<Dict> {
+  return async (...args: A) => {
+    try {
+      return await fn(...args);
+    } catch (e) {
+      const result = errorResult(e);
+      if (result === null) throw e;
+      return result;
+    }
+  };
+}
+
+export const whoami = safe(async (): Promise<Dict> => {
+  const settings = await client.get("/settings");
+  return {
+    profile: config.profile,
+    endpoint: client.baseUrl,
+    notify_email: (settings.notify ?? {}).email ?? null,
+    github_pat_configured: ((settings.github ?? {}).token ?? {}).configured ?? null,
+  };
+});
+
+export async function bundleSource(
+  playbookPath?: string | null,
+  playbookYaml?: string | null,
+  playbookUri?: string | null,
+): Promise<string> {
+  if ([playbookPath, playbookYaml, playbookUri].filter(Boolean).length !== 1) {
+    throw new SatoriError("Provide exactly one of playbook_path, playbook_yaml or playbook_uri.");
+  }
+
+  if (playbookUri) {
+    if (!playbookUri.startsWith("satori://")) {
+      throw new SatoriError(
+        "playbook_uri must be a catalog URI like satori://code/python/pyspector_v2.yml (see list_playbooks).",
+      );
+    }
+    return playbookUri;
+  }
+
+  let bundle: Uint8Array;
+  if (playbookYaml) {
+    const tmp = mkdtempSync(join(tmpdir(), "satori-playbook-"));
+    try {
+      const path = join(tmp, ".satori.yml");
+      writeFileSync(path, playbookYaml);
+      bundle = makeBundle(path);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  } else {
+    const path = expandUser(playbookPath!);
+    if (!isFile(path) || ![".yml", ".yaml"].includes(extname(path))) {
+      throw new SatoriError(`playbook_path must be an existing .yml file: ${playbookPath}`);
+    }
+    bundle = makeBundle(path);
+  }
+  return uploadBundle(bundle);
+}
+
+async function firstExecutionId(jobId: number, attempts = 15): Promise<number | null> {
+  for (let i = 0; i < attempts; i++) {
+    const { items } = await client.get("/executions", { job_id: jobId, quantity: 1 });
+    if (items.length) return items[0].id;
+    await deps.sleep(1000);
+  }
+  return null;
+}
+
+export async function executionSummary(executionId: number): Promise<Dict> {
+  const execution = await client.get(`/executions/${executionId}`);
+  return shaping.summarizeExecution(execution, reportUrl(executionId));
+}
+
+export interface RecommendArgs {
+  directory?: string | null;
+  prefs?: Dict | null;
+}
+
+export const recommendPlaybook = safe(async ({ directory, prefs }: RecommendArgs = {}): Promise<Dict> => {
+  const given = expandUser(directory || ".");
+  if (!isDir(given)) return { error: `directory must be an existing directory: ${directory}` };
+  const root = resolve(given);
+
+  const readIfFile = (path: string) => (isFile(path) ? readFileSync(path, "utf-8") : null);
+  const llmText = readIfFile(join(root, recommend.LLM_PLAYBOOK));
+  const ciText = readIfFile(join(root, recommend.CI_PLAYBOOK));
+
+  // Prefer .satori-llm.yml; fall back to a legacy recommended .satori.yml for migrate.
+  const legacyCi = llmText === null && ciText !== null && recommend.hasRecommendedHeader(ciText);
+  const existingLlm = llmText !== null ? llmText : legacyCi ? ciText : null;
+  const previous = existingLlm ? recommend.parseHeader(existingLlm) : null;
+
+  const profile = recommend.detect(root);
+  const rec = recommend.build(profile, prefs ?? null, previous);
+
+  const result: Dict = {
+    language: profile.language,
+    package_manager: profile.manager,
+    rules_version: rec.rulesVersion,
+    checks: rec.checks.map(({ id, category, command, blocking, why }) => ({ id, category, command, blocking, why })),
+    questions: rec.questions,
+    prefs: rec.prefsUsed,
+    notes: rec.notes,
+    llm_playbook: recommend.LLM_PLAYBOOK,
+    ci_playbook: recommend.CI_PLAYBOOK,
+  };
+
+  const hintParts: string[] = [];
+  if (existingLlm === null) {
+    result.playbook_yaml = shaping.clip(rec.yaml, shaping.MAX_PLAYBOOK_CHARS);
+    hintParts.push(
+      `Write playbook_yaml to ${recommend.LLM_PLAYBOOK} with the user's approval, ` +
+        `then run_local(playbook_path=${pyRepr(recommend.LLM_PLAYBOOK)}).`,
+    );
+  } else {
+    result.existing = true;
+    result.changes = recommend.diffExisting(existingLlm, rec);
+    result.header = rec.header;
+    if (legacyCi) {
+      result.migrate_from_ci = true;
+      hintParts.push(
+        `Move the recommended content out of ${recommend.CI_PLAYBOOK} into ` +
+          `${recommend.LLM_PLAYBOOK}: merge \`changes\`, set the \`# satori:recommended\` ` +
+          "header line to `header`, with the user's approval.",
+      );
+    } else {
+      hintParts.push(
+        `Merge \`changes\` into ${recommend.LLM_PLAYBOOK} and replace its ` +
+          "`# satori:recommended` header line with `header` (add it if missing), " +
+          "with the user's approval.",
+      );
+    }
+  }
+
+  if (ciText === null) {
+    result.ci_playbook_yaml = recommend.ciImporterYaml();
+    hintParts.push(`Also write ci_playbook_yaml to ${recommend.CI_PLAYBOOK} (imports the LLM file).`);
+  } else if (!recommend.ciImportsLlm(ciText)) {
+    result.needs_ci_import = true;
+    result.ci_import_yaml = recommend.ciImporterYaml();
+    hintParts.push(
+      `Add \`import: - ${recommend.LLM_IMPORT}\` to ${recommend.CI_PLAYBOOK} ` +
+        "(see ci_import_yaml); do not overwrite existing CI checks.",
+    );
+  }
+
+  if (rec.questions.length) {
+    hintParts.push("Ask the user the `questions` first and call again with `prefs`; defaults were applied meanwhile.");
+  }
+  result.hint = hintParts.join(" ");
+  return result;
+});
+
+export interface PlaybookSourceArgs {
+  playbook_path?: string | null;
+  playbook_yaml?: string | null;
+  playbook_uri?: string | null;
+}
+
+export interface RunPlaybookArgs extends PlaybookSourceArgs {
+  repository?: string | null;
+  parameters?: Record<string, string[]> | null;
+  regions?: string[] | null;
+  wait?: boolean;
+  wait_seconds?: number;
+}
+
+export const runPlaybook = safe(async (args: RunPlaybookArgs = {}): Promise<Dict> => {
+  const { wait = true, wait_seconds: waitSeconds = 120 } = args;
+  const source = await bundleSource(args.playbook_path, args.playbook_yaml, args.playbook_uri);
+  const run = await client.post("/jobs/runs", {
+    playbook_source: source,
+    parameters: args.parameters || {},
+    regions: args.regions || [],
+    count: 1,
+    save_report: true,
+    save_output: true,
+    repository: args.repository ?? null,
+    visibility: "PRIVATE",
+  });
+  const jobId = run.id;
+  const result: Dict = { job_id: jobId, status: run.status ?? null, playbook_source: source };
+
+  const executionId = await firstExecutionId(jobId);
+  result.execution_id = executionId;
+  if (executionId) result.report_url = reportUrl(executionId);
+
+  if (!wait || executionId === null) {
+    result.hint = "Call get_execution(execution_id) to check progress, or stop_execution(execution_id) to cancel.";
+    return result;
+  }
+
+  const deadline = deps.now() + clamp(waitSeconds, 0, 600) * 1000;
+  let status = result.status;
+  while (!["FINISHED", "CANCELED"].includes(status) && deps.now() < deadline) {
+    await deps.sleep(2000);
+    status = (await client.get(`/jobs/${jobId}`)).status;
+  }
+  result.status = status;
+
+  if (["FINISHED", "CANCELED"].includes(status)) {
+    result.execution = await executionSummary(executionId);
+  } else {
+    result.hint = `Still ${status} after ${waitSeconds}s. Call get_execution(execution_id) later.`;
+  }
+  return result;
+});
+
+export interface RunLocalArgs extends PlaybookSourceArgs {
+  repository?: string | null;
+  directory?: string | null;
+  parameters?: Record<string, string[]> | null;
+  run?: string[] | null;
+  timeout_seconds?: number;
+}
+
+export const runLocal = safe(async (args: RunLocalArgs = {}): Promise<Dict> => {
+  const { repository, directory, timeout_seconds: timeoutSeconds = LOCAL_DEFAULT_TIMEOUT } = args;
+  if (repository && directory) return { error: "Provide only one of repository or directory." };
+  if (repository && repository.endsWith("/*")) return { error: "wildcard is not supported on local" };
+  if (repository && !isGithubRepo(repository)) return { error: "repository must be 'owner/repo'." };
+  if (directory && !isDir(expandUser(directory))) {
+    return { error: `directory must be an existing directory: ${directory}` };
+  }
+
+  const source = await bundleSource(args.playbook_path, args.playbook_yaml, args.playbook_uri);
+  const timeout = clamp(timeoutSeconds, 1, LOCAL_MAX_TIMEOUT);
+
+  let cloneTmpdir: string | null = null;
+  let outcome;
+  try {
+    let workdir = directory ? expandUser(directory) : undefined;
+    if (repository) {
+      const git = requireGit();
+      cloneTmpdir = mkdtempSync(join(tmpdir(), "satori-local-"));
+      workdir = await cloneRepo(git, repository, cloneTmpdir);
+    }
+    outcome = await deps.runLocalJob(source, {
+      parameters: args.parameters || {},
+      repository: repository ?? null,
+      workdir,
+      run: args.run ?? [],
+      timeout,
+      needsReport: true,
+    });
+  } finally {
+    if (cloneTmpdir !== null) rmSync(cloneTmpdir, { recursive: true, force: true });
+  }
+
+  const result: Dict = {
+    job_id: outcome.job.id,
+    status: outcome.timedOut ? "CANCELED" : "FINISHED",
+    playbook_source: source,
+    execution_id: outcome.executionId,
+  };
+  if (outcome.timedOut) result.timed_out = true;
+  if (outcome.executionId === null) {
+    result.hint =
+      "Results were uploaded but no execution appeared yet; call get_job(job_id) or list_executions(job_id=...) later.";
+    return result;
+  }
+
+  result.report_url = reportUrl(outcome.executionId);
+  result.execution = await executionSummary(outcome.executionId);
+  result.hint =
+    "Call get_execution_output(execution_id, test=...) for logs and list_findings(execution_id=...) for findings.";
+  return result;
+});
+
+export const getExecution = safe(async ({ execution_id }: { execution_id: number }) =>
+  executionSummary(execution_id),
+);
+
+export interface ListExecutionsArgs {
+  job_id?: number | null;
+  status?: string[] | null;
+  report_status?: string | null;
+  job_type?: string | null;
+  from_?: string | null;
+  to?: string | null;
+  q?: string | null;
+  visibility?: string | null;
+  severity?: number | null;
+  playbook?: string | null;
+  tags?: string[] | null;
+  id_gt?: number | null;
+  id_lt?: number | null;
+  global_?: boolean;
+  order?: string | null;
+  quantity?: number;
+  page?: number;
+}
+
+export const listExecutions = safe(async (args: ListExecutionsArgs = {}): Promise<Dict> => {
+  const { report_status: reportStatus, job_type: jobType, from_: from, to, severity, page = 1 } = args;
+  const visibility = args.visibility ? args.visibility.toUpperCase() : null;
+  const order = args.order ? args.order.toUpperCase() : null;
+  if (reportStatus && !REPORT_STATUSES.includes(reportStatus)) return oneOf("report_status", REPORT_STATUSES);
+  if (jobType && !JOB_TYPES.includes(jobType)) return oneOf("job_type", JOB_TYPES);
+  if (visibility && !VISIBILITIES.includes(visibility)) return oneOf("visibility", VISIBILITIES);
+  if (severity !== null && severity !== undefined && (severity < 0 || severity > 5)) {
+    return { error: "severity must be an int 0-5." };
+  }
+  if (order && !ORDERS.includes(order)) return oneOf("order", ORDERS);
+  if (from && to && from >= to) return { error: "from_ must be earlier than to." };
+
+  const quantity = clamp(args.quantity ?? 25, 1, 25);
+  const params: Dict = { quantity, page, order: order || "DESC" };
+  const optional: Dict = {
+    job_id: args.job_id,
+    status: args.status,
+    report_status: reportStatus,
+    job_type: jobType,
+    from,
+    to,
+    q: args.q,
+    visibility,
+    severity,
+    playbook: args.playbook,
+    tags: args.tags,
+    id_gt: args.id_gt,
+    id_lt: args.id_lt,
+  };
+  for (const [k, v] of Object.entries(optional)) {
+    if (v !== null && v !== undefined && !(Array.isArray(v) && v.length === 0)) params[k] = v;
+  }
+  if (args.global_) params.global = true;
+  const data = await client.get("/executions", params);
+  return shaping.paged(
+    data.items.map((e: Dict) => shaping.summarizeExecutionRow(e, reportUrl(e.id))),
+    data.total,
+    page,
+    quantity,
+  );
+});
+
+export const stopExecution = safe(async ({ execution_id: id }: { execution_id: number }): Promise<Dict> => {
+  const status = (await client.get(`/executions/${id}`)).status ?? null;
+  if (status !== "RUNNING") {
+    return { execution_id: id, status, stopped: false, hint: "Only RUNNING executions can be stopped." };
+  }
+  await client.patch(`/executions/${id}`, { status: "CANCELED" });
+  return { execution_id: id, stopped: true, hint: "Cancellation is asynchronous; call get_execution to confirm." };
+});
+
+export const getExecutionPlaybook = safe(async ({ execution_id: id }: { execution_id: number }): Promise<Dict> => {
+  const text = await client.getText(`/executions/${id}/playbook`);
+  return {
+    execution_id: id,
+    yaml: shaping.clip(text, shaping.MAX_PLAYBOOK_CHARS),
+    truncated: text.length > shaping.MAX_PLAYBOOK_CHARS,
+  };
+});
+
+export interface GetExecutionOutputArgs {
+  execution_id: number;
+  test?: string | null;
+  stream?: string;
+  tail_lines?: number;
+  offset_from_end?: number;
+}
+
+export const getExecutionOutput = safe(async (args: GetExecutionOutputArgs): Promise<Dict> => {
+  const { execution_id: id, test, tail_lines: tail = 100, offset_from_end: offset = 0 } = args;
+  let stream = args.stream ?? "stdout";
+  const streams: readonly string[] = shaping.OUTPUT_STREAMS;
+  if (!streams.includes(stream)) return oneOf("stream", [...streams]);
+
+  const outputs = await deps.loadExecutionOutputs(id);
+  if (!test) {
+    return {
+      execution_id: id,
+      tests: shaping.outputIndex(outputs),
+      hint: "Call again with `test` set to one of these paths to read its output.",
+    };
+  }
+
+  const normalized = test.replace(/:/g, ".");
+  let path = normalized;
+  const dot = normalized.lastIndexOf(".");
+  const suffix = dot === -1 ? normalized : normalized.slice(dot + 1);
+  if (streams.includes(suffix)) {
+    stream = suffix;
+    path = dot === -1 ? "" : normalized.slice(0, dot);
+  }
+  const selected = runTestFilter(
+    [path],
+    outputs.map((o) => ({ ...o })),
+  );
+  if (!selected.length) {
+    return { error: `No test matches ${pyRepr(test)}.`, tests: shaping.outputIndex(outputs) };
+  }
+
+  const picked = selected[0];
+  const text = String((picked.output ?? {})[stream] || "");
+  return { ...shaping.tailLines(text, tail, offset), execution_id: id, path: picked.path, stream };
+});
+
+export interface ListFindingsArgs {
+  execution_id?: number | null;
+  severity?: (number | string)[] | null;
+  status?: string | null;
+  source?: string | null;
+  order?: string | null;
+  quantity?: number;
+  page?: number;
+}
+
+export const listFindings = safe(async (args: ListFindingsArgs = {}): Promise<Dict> => {
+  const { page = 1 } = args;
+  const status = args.status ? args.status.toUpperCase() : null;
+  const source = args.source ? args.source.toUpperCase() : null;
+  const order = args.order ? args.order.toUpperCase() : null;
+  if (status && !FINDING_STATUSES.includes(status)) return oneOf("status", FINDING_STATUSES);
+  if (source && !FINDING_SOURCES.includes(source)) return oneOf("source", FINDING_SOURCES);
+  if (order && !ORDERS.includes(order)) return oneOf("order", ORDERS);
+  let severities: number[] | null = null;
+  if (args.severity && args.severity.length) {
+    const normalized = normalizeSeverities(args.severity);
+    if (typeof normalized === "string") return { error: normalized };
+    severities = normalized;
+  }
+  const quantity = clamp(args.quantity ?? 25, 1, 25);
+  const params: Dict = { quantity, page };
+  if (args.execution_id !== null && args.execution_id !== undefined) params.execution_id = args.execution_id;
+  if (severities && severities.length) params.severity = severities;
+  if (status) params.status = status;
+  if (source) params.source = source;
+  if (order) params.order = order;
+  const data = await client.get("/findings", params);
+  return shaping.paged(data.items.map(shaping.summarizeFinding), data.total, page, quantity);
+});
+
+export const getFinding = safe(
+  async ({ finding_id: id, include_timeline = true }: { finding_id: number; include_timeline?: boolean }) => {
+    const result = shaping.detailFinding(await client.get(`/findings/${id}`));
+    if (include_timeline) Object.assign(result, shaping.summarizeTimeline(await client.get(`/findings/${id}/timeline`)));
+    return result;
+  },
+);
+
+export const getFindingTimeline = safe(async ({ finding_id: id }: { finding_id: number }) =>
+  shaping.summarizeTimeline(await client.get(`/findings/${id}/timeline`)),
+);
+
+export const updateFindingStatus = safe(
+  async ({ finding_id: id, status, comment }: { finding_id: number; status: string; comment?: string | null }) => {
+    status = status.toUpperCase();
+    if (!FINDING_STATUSES.includes(status)) return oneOf("status", FINDING_STATUSES);
+    if (comment !== null && comment !== undefined && comment.length > shaping.MAX_COMMENT_CHARS) {
+      return { error: `comment exceeds ${shaping.MAX_COMMENT_CHARS} characters.` };
+    }
+
+    const updated = await client.patch(`/findings/${id}`, { status });
+    const result: Dict = { id, status: updated.status ?? status };
+    if (comment) {
+      try {
+        result.comment_id = (await client.post(`/findings/${id}/comments`, { body: comment })).id;
+      } catch (e) {
+        if (!(e instanceof HttpStatusError)) throw e;
+        result.comment_error = shaping.clip(e.text, 500);
+      }
+    }
+    return result;
+  },
+);
+
+export const addFindingComment = safe(async ({ finding_id: id, body }: { finding_id: number; body: string }) => {
+  if (!body || !body.trim()) return { error: "body must be a non-empty comment." };
+  if (body.length > shaping.MAX_COMMENT_CHARS) {
+    return { error: `comment exceeds ${shaping.MAX_COMMENT_CHARS} characters.` };
+  }
+  const comment = await client.post(`/findings/${id}/comments`, { body });
+  return { finding_id: id, comment_id: comment.id };
+});
+
+export interface ListJobsArgs {
+  type?: string | null;
+  visibility?: string | null;
+  quantity?: number;
+  page?: number;
+}
+
+export const listJobs = safe(async (args: ListJobsArgs = {}): Promise<Dict> => {
+  const { type, page = 1 } = args;
+  const visibility = args.visibility ? args.visibility.toUpperCase() : null;
+  if (type && !LISTABLE_JOB_TYPES.includes(type)) return oneOf("type", LISTABLE_JOB_TYPES);
+  if (visibility && !VISIBILITIES.includes(visibility)) return oneOf("visibility", VISIBILITIES);
+  const quantity = clamp(args.quantity ?? 25, 1, 25);
+  const params: Dict = { quantity, page, order: "DESC" };
+  if (type) params.type = type;
+  if (visibility) params.visibility = visibility;
+  const data = await client.get("/jobs", params);
+  return shaping.paged(data.items.map(shaping.summarizeJob), data.total, page, quantity);
+});
+
+export const getJob = safe(async ({ job_id: id }: { job_id: number }): Promise<Dict> => {
+  const result = shaping.summarizeJob(await client.get(`/jobs/${id}`));
+  const { items } = await client.get("/executions", { job_id: id, quantity: 5, order: "DESC" });
+  result.executions = items.map((e: Dict) => shaping.summarizeExecutionRow(e, reportUrl(e.id)));
+  return result;
+});
+
+export interface ScanRepositoryArgs extends PlaybookSourceArgs {
+  repository: string;
+  parameters?: Record<string, string[]> | null;
+  regions?: string[] | null;
+  quantity?: number;
+}
+
+export const scanRepository = safe(async (args: ScanRepositoryArgs): Promise<Dict> => {
+  const repository = args.repository || "";
+  const wildcard = repository.endsWith("/*") && Boolean(wildcardOwner(repository));
+  if (!wildcard && !isGithubRepo(repository)) return { error: "repository must be 'owner/repo' or 'owner/*'." };
+  const provided = [args.playbook_path, args.playbook_yaml, args.playbook_uri].filter(Boolean).length;
+  if (provided > 1) return { error: "Provide at most one of playbook_path, playbook_yaml or playbook_uri." };
+  const source =
+    provided === 1 ? await bundleSource(args.playbook_path, args.playbook_yaml, args.playbook_uri) : null;
+  const quantity = wildcard ? 1 : clamp(args.quantity ?? 1, 1, MAX_SCAN_QUANTITY);
+  const body: Dict = {
+    parameters: args.parameters || {},
+    regions: args.regions || [],
+    repository_data: { repository },
+    criteria: { quantity },
+    visibility: "PRIVATE",
+  };
+  if (source !== null) body.playbook_source = source;
+  const scan = await client.post("/jobs/scans", body);
+  return {
+    job_id: scan.id,
+    status: scan.status ?? null,
+    repository,
+    playbook_source: scan.playbook_source || source,
+    hint: "Call get_job(job_id) to follow progress and see its executions.",
+  };
+});
+
+type VisibilityPageArgs = { visibility?: string | null; quantity?: number; page?: number };
+
+export const listScans = safe(async (args: VisibilityPageArgs = {}) => listJobs({ ...args, type: "SCAN" }));
+
+export const listMonitors = safe(async (args: VisibilityPageArgs = {}) => listJobs({ ...args, type: "MONITOR" }));
+
+export interface ListPlaybooksArgs {
+  q?: string | null;
+  category?: string | null;
+  quantity?: number;
+  page?: number;
+}
+
+export const listPlaybooks = safe(async (args: ListPlaybooksArgs = {}): Promise<Dict> => {
+  const { q, category, page = 1 } = args;
+  const quantity = clamp(args.quantity ?? 25, 1, 25);
+  const catalog: Dict[] = (await playbooksClient.get("/playbooks")).playbooks;
+  const needle = q ? q.toLowerCase() : null;
+  const matches = catalog.filter(
+    (p) =>
+      (!category || String(p.category ?? "").toLowerCase() === category.toLowerCase()) &&
+      (!needle ||
+        ["id", "name", "description"]
+          .map((k) => String(p[k] ?? ""))
+          .join(" ")
+          .toLowerCase()
+          .includes(needle)),
+  );
+  const start = (page - 1) * quantity;
+  return shaping.paged(
+    matches.slice(start, start + quantity).map(shaping.summarizeCatalogPlaybook),
+    matches.length,
+    page,
+    quantity,
+  );
+});
+
+export const getPlaybook = safe(async ({ playbook_uri: uri }: { playbook_uri: string }): Promise<Dict> => {
+  const id = uri.startsWith("satori://") ? uri.slice("satori://".length) : uri;
+  const data = await playbooksClient.get(`/playbooks/${id}`);
+  const result = shaping.summarizeCatalogPlaybook(data);
+  const content: string = data.content || "";
+  result.image = data.image ?? null;
+  result.example = data.example ?? null;
+  result.yaml = shaping.clip(content, shaping.MAX_PLAYBOOK_CHARS);
+  result.truncated = content.length > shaping.MAX_PLAYBOOK_CHARS;
+  return result;
+});
+
+export interface ListAdvisoriesArgs {
+  execution_id?: number | null;
+  kind?: string | null;
+  provider?: string | null;
+  order?: string | null;
+  quantity?: number;
+  page?: number;
+}
+
+export const listAdvisories = safe(async (args: ListAdvisoriesArgs = {}): Promise<Dict> => {
+  const { page = 1 } = args;
+  const kind = args.kind ? args.kind.toUpperCase() : null;
+  const provider = args.provider ? args.provider.toUpperCase() : null;
+  const order = args.order ? args.order.toUpperCase() : null;
+  if (kind && !ADVISORY_KINDS.includes(kind)) return oneOf("kind", ADVISORY_KINDS);
+  if (provider && !ADVISORY_PROVIDERS.includes(provider)) return oneOf("provider", ADVISORY_PROVIDERS);
+  if (order && !ORDERS.includes(order)) return oneOf("order", ORDERS);
+  const quantity = clamp(args.quantity ?? 25, 1, 25);
+  const params: Dict = { quantity, page };
+  const optional: Dict = { execution_id: args.execution_id, kind, provider, order };
+  for (const [k, v] of Object.entries(optional)) if (v !== null && v !== undefined) params[k] = v;
+  const data = await client.get("/external_issues", params);
+  return shaping.paged(data.items.map(shaping.summarizeAdvisory), data.total, page, quantity);
+});
+
+export const listRepos = safe(async (args: { order?: string | null; quantity?: number; page?: number } = {}) => {
+  const { page = 1 } = args;
+  const order = args.order ? args.order.toUpperCase() : null;
+  if (order && !ORDERS.includes(order)) return oneOf("order", ORDERS);
+  const quantity = clamp(args.quantity ?? 50, 1, 50);
+  const params: Dict = { quantity, page };
+  if (order) params.order = order;
+  const data = await client.get("/repos", params);
+  return shaping.paged(data.items.map(shaping.summarizeRepo), data.total, page, quantity);
+});
+
+export async function fetchDoc(name: string): Promise<string> {
+  const url = `${DOCS_URL}/${DOC_PAGES[name]}.md`;
+  try {
+    const res = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return shaping.clip(await res.text(), DOC_MAX_CHARS);
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e);
+    return `Could not fetch ${url} (${reason}). Docs source: satori-docs/satori_help/docs/${DOC_PAGES[name]}.md`;
+  }
+}
+
+export function writeAndRunPlaybookPrompt(goal: string): string {
+  return (
+    `Goal: ${goal}\n\n` +
+    "1. Read the satori-docs://playbooks/language resource (and asserts if needed).\n" +
+    "2. If the playbook runs a security/analysis tool, read " +
+    "satori-docs://playbooks/tool-output and prefer that tool's JSON/JSONL flags " +
+    "over human-readable defaults.\n" +
+    "3. Write the playbook YAML.\n" +
+    "4. Call run_playbook with playbook_yaml (a validation error is returned verbatim; fix and retry).\n" +
+    "5. Call get_execution; if there are failures, call get_execution_output with a `test` " +
+    "filter (never request full logs) and list_findings(execution_id=...).\n" +
+    "6. Summarize the result and include the report_url."
+  );
+}

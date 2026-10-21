@@ -1,0 +1,683 @@
+# Rules for the `recommend_playbook` MCP tool. Adding a tool = one entry here + a fixture
+# under tests/fixtures/. Detection and playbook assembly live in recommend.py; this file
+# only references the closed vocabulary of predicates defined there.
+#
+# Bump `rules_version` whenever tools are added; give each new tool `since: <that version>`
+# so repos already on an older recommendation are only asked about what is new.
+
+rules_version: 2
+
+# User-facing preferences. `choice` prefs pick one tool among several; `bool` prefs turn an
+# optional tool on or off. A pref is only asked when the repo does not already settle it.
+prefs:
+  formatter:
+    language: python
+    type: choice
+    choices: [ruff, black]
+    default: ruff
+    question: "Which Python formatter should the playbook check?"
+  dead_code:
+    language: python
+    type: bool
+    default: false
+    question: "Add vulture dead-code detection (informational)?"
+  types:
+    language: python
+    type: bool
+    default: true
+    question: "Add pyrefly type checking?"
+  security:
+    language: python
+    type: bool
+    default: true
+    question: "Add pyspector security scanning?"
+
+# How each language/package manager prepares the environment and runs tools.
+#   image     playbook `settings.image` (used by remote runs)
+#   install   commands for the `install` section (`install_nolock` when no lockfile exists)
+#   run       prefix for tools that live in the project environment
+#   exec      prefix for tools fetched on demand (python-tool kind uses `--from`)
+#   tool_install / tool   install step and run prefix for `kind: tool` entries
+profiles:
+  python:
+    uv:
+      image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+      install: ["uv sync --all-groups"]
+      run: "uv run "
+      tool: "uvx --from {package}=={version} "
+    pip:
+      image: python:3.12-slim
+      install: ["python -m venv .venv"]
+      project_install:
+        requirements: ".venv/bin/pip install -r requirements.txt"
+        project: ".venv/bin/pip install ."
+      run: ".venv/bin/"
+      tool: ".venv/bin/"
+      tool_install: ".venv/bin/pip install {package}=={version}"
+  node:
+    npm:
+      image: node:22-slim
+      install: ["npm ci"]
+      install_nolock: ["npm install"]
+      run: "npx --no-install "
+      pm: "npm"
+    pnpm:
+      image: node:22-slim
+      install: ["corepack pnpm install --frozen-lockfile"]
+      install_nolock: ["corepack pnpm install"]
+      run: "corepack pnpm exec "
+      pm: "corepack pnpm"
+    yarn:
+      image: node:22-slim
+      install: ["corepack yarn install --immutable"]
+      install_nolock: ["corepack yarn install"]
+      run: "corepack yarn "
+      pm: "corepack yarn"
+    bun:
+      image: oven/bun:1
+      install: ["bun install --frozen-lockfile"]
+      install_nolock: ["bun install"]
+      run: "bunx --bun "
+      pm: "bun"
+  go:
+    go:
+      image: golang:1.24
+      install: ["go mod download"]
+      run: ""
+  java:
+    maven:
+      image: maven:3.9-eclipse-temurin-21
+      install: []
+      run: ""
+    gradle:
+      image: gradle:8-jdk21
+      install: []
+      run: ""
+  csharp:
+    dotnet:
+      image: mcr.microsoft.com/dotnet/sdk:9.0
+      install: ["dotnet restore"]
+      run: ""
+  rust:
+    cargo:
+      image: rust:1
+      install: ["rustup component add clippy rustfmt", "cargo fetch"]
+      run: ""
+      tool_install: "cargo install --locked {package}@{version}"
+  ruby:
+    bundler:
+      image: ruby:3.4
+      install: ["bundle install"]
+      run: "bundle exec "
+      tool_install: "gem install {package} -v {version}"
+      tool: ""
+  php:
+    composer:
+      image: composer:2
+      install: ["composer install --no-interaction --no-progress"]
+      run: "vendor/bin/"
+  swift:
+    swiftpm:
+      image: swift:6.2
+      install: ["swift package resolve"]
+      run: ""
+  cpp:
+    cmake:
+      image: gcc:14
+      install:
+        - "apt-get update && apt-get install -y --no-install-recommends cmake cppcheck clang-format"
+        - "cmake -S . -B build"
+      run: ""
+  solidity:
+    foundry:
+      image: ghcr.io/foundry-rs/foundry:stable
+      install: []
+      run: ""
+
+# Tool entries.
+#   language / category   category is one of lint|format|types|unit|security
+#   kind                  python-tool (fetched on demand, `package`+`version`), tool (same,
+#                         via the profile's `tool_install`), or project (runs in the
+#                         project environment)
+#   when                  AND of predicates: has_file, has_dir, has_dep, pkg_script, manager
+#   configured_by         tokens that mean "the repo already uses this tool":
+#                         file:<glob>, pyproject:<dotted.path>, dep:<name>
+#   pref                  `name` (bool pref must be true) or `{name: value}` (choice pref)
+#   blocking_if_present   when the repo already uses the tool, a failure fails the playbook
+#   command               string, or a map keyed by manager (with `default`)
+#   severity              0-5 passed to setSeverity
+tools:
+  # ---------------------------------------------------------------- python
+  - id: ruff_check
+    language: python
+    category: lint
+    kind: python-tool
+    package: ruff
+    version: "0.17.0"
+    command: "ruff check --output-format=json ."
+    configured_by: ["pyproject:tool.ruff", "file:ruff.toml", "file:.ruff.toml"]
+    blocking_if_present: true
+    severity: 2
+    since: 1
+    why: "Fast linter; JSON output lets Satori turn hits into findings."
+
+  - id: ruff_format
+    language: python
+    category: format
+    kind: python-tool
+    package: ruff
+    version: "0.17.0"
+    command: "ruff format --check ."
+    pref: { formatter: ruff }
+    configured_by: ["pyproject:tool.ruff.format"]
+    blocking_if_present: true
+    severity: 1
+    since: 1
+    why: "Formatting drift check with ruff (chosen formatter)."
+
+  - id: black_check
+    language: python
+    category: format
+    kind: python-tool
+    package: black
+    version: "26.10.1"
+    command: "black --check ."
+    pref: { formatter: black }
+    configured_by: ["pyproject:tool.black"]
+    blocking_if_present: true
+    severity: 1
+    since: 1
+    why: "Formatting drift check with black (chosen formatter)."
+
+  - id: pytest
+    language: python
+    category: unit
+    kind: project
+    package: pytest
+    version: "9.1.1"
+    command: "pytest -q"
+    when: { has_any: [{ has_dir: tests }, { has_dir: test }, { has_file: "pytest.ini" }, { has_file: "conftest.py" }] }
+    configured_by: ["pyproject:tool.pytest", "file:pytest.ini", "dep:pytest"]
+    blocking_if_present: true
+    severity: 3
+    since: 1
+    why: "Runs the unit test suite."
+
+  - id: pyrefly
+    language: python
+    category: types
+    kind: python-tool
+    package: pyrefly
+    version: "1.3.2"
+    command: "pyrefly check"
+    pref: types
+    configured_by: ["pyproject:tool.pyrefly", "file:pyrefly.toml"]
+    blocking_if_present: true
+    severity: 2
+    since: 1
+    why: "Static type checking."
+
+  - id: pyspector
+    language: python
+    category: security
+    kind: python-tool
+    package: pyspector
+    version: "0.2.2"
+    command: "pyspector scan . -f json"
+    pref: security
+    configured_by: ["dep:pyspector"]
+    blocking_if_present: false
+    severity: 4
+    since: 1
+    why: "Python SAST; JSON output is parsed into TOOL findings."
+
+  - id: vulture
+    language: python
+    category: lint
+    kind: python-tool
+    package: vulture
+    version: "2.16"
+    command: "vulture ."
+    pref: dead_code
+    configured_by: ["pyproject:tool.vulture", "dep:vulture"]
+    blocking_if_present: false
+    severity: 1
+    since: 1
+    why: "Dead code detection, informational (many false positives)."
+
+  # ------------------------------------------------------------ javascript
+  - id: eslint
+    language: node
+    category: lint
+    kind: project
+    command: "eslint -f json ."
+    when: { has_any: [{ has_file: "eslint.config.*" }, { has_file: ".eslintrc*" }, { has_dep: eslint }] }
+    configured_by: ["file:eslint.config.*", "file:.eslintrc*", "dep:eslint"]
+    blocking_if_present: true
+    severity: 2
+    since: 1
+    why: "Lint with the repo's own ESLint setup; JSON output feeds findings."
+
+  - id: prettier
+    language: node
+    category: format
+    kind: project
+    command: "prettier --check ."
+    when: { has_any: [{ has_file: ".prettierrc*" }, { has_file: "prettier.config.*" }, { has_dep: prettier }] }
+    configured_by: ["file:.prettierrc*", "file:prettier.config.*", "dep:prettier"]
+    blocking_if_present: true
+    severity: 1
+    since: 1
+    why: "Formatting drift check with the repo's Prettier setup."
+
+  - id: tsc
+    language: node
+    category: types
+    kind: project
+    command: "tsc --noEmit"
+    when: { has_file: "tsconfig.json" }
+    configured_by: ["file:tsconfig.json"]
+    blocking_if_present: true
+    severity: 2
+    since: 1
+    why: "TypeScript type check without emitting files."
+
+  - id: node_tests
+    language: node
+    category: unit
+    kind: project
+    command: "{pm} run test"
+    when: { pkg_script: test }
+    configured_by: ["file:package.json"]
+    blocking_if_present: true
+    severity: 3
+    since: 1
+    why: "Runs the repo's own `test` script."
+
+  - id: node_audit
+    language: node
+    category: security
+    kind: project
+    command:
+      npm: "npm audit --json"
+      pnpm: "corepack pnpm audit --json"
+      yarn: "corepack yarn npm audit --json"
+      default: ""
+    configured_by: []
+    blocking_if_present: false
+    severity: 4
+    since: 1
+    why: "Known-vulnerable dependencies; JSON output is parsed into findings."
+
+  # -------------------------------------------------------------------- go
+  - id: go_vet
+    language: go
+    category: lint
+    kind: project
+    command: "go vet ./..."
+    configured_by: []
+    blocking_if_present: true
+    severity: 2
+    since: 1
+    why: "Built-in static checks."
+
+  - id: gofmt
+    language: go
+    category: format
+    kind: project
+    command: 'test -z "$(gofmt -l .)"'
+    configured_by: []
+    blocking_if_present: true
+    severity: 1
+    since: 1
+    why: "Fails if any file is not gofmt-formatted."
+
+  - id: go_test
+    language: go
+    category: unit
+    kind: project
+    command: "go test ./..."
+    configured_by: []
+    blocking_if_present: true
+    severity: 3
+    since: 1
+    why: "Runs the unit tests."
+
+  - id: govulncheck
+    language: go
+    category: security
+    kind: project
+    command: "go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -format json ./..."
+    configured_by: []
+    blocking_if_present: false
+    severity: 4
+    since: 1
+    why: "Known vulnerabilities reachable from your code."
+
+  # ------------------------------------------------------------------ java
+  - id: maven_test
+    language: java
+    category: unit
+    kind: project
+    command: "mvn -B -ntp test"
+    when: { manager: [maven] }
+    configured_by: []
+    blocking_if_present: true
+    severity: 3
+    since: 1
+    why: "Compiles and runs the unit tests."
+
+  - id: gradle_test
+    language: java
+    category: unit
+    kind: project
+    command: "gradle test --no-daemon"
+    when: { manager: [gradle] }
+    configured_by: []
+    blocking_if_present: true
+    severity: 3
+    since: 1
+    why: "Compiles and runs the unit tests."
+
+  # ---------------------------------------------------------------- csharp
+  - id: dotnet_build
+    language: csharp
+    category: lint
+    kind: project
+    command: "dotnet build --no-restore -warnaserror"
+    configured_by: []
+    blocking_if_present: true
+    severity: 2
+    since: 1
+    why: "Build with warnings as errors."
+
+  - id: dotnet_format
+    language: csharp
+    category: format
+    kind: project
+    command: "dotnet format --verify-no-changes --no-restore"
+    configured_by: ["file:.editorconfig"]
+    blocking_if_present: true
+    severity: 1
+    since: 1
+    why: "Formatting drift check."
+
+  - id: dotnet_test
+    language: csharp
+    category: unit
+    kind: project
+    command: "dotnet test --no-restore"
+    configured_by: []
+    blocking_if_present: true
+    severity: 3
+    since: 1
+    why: "Runs the unit tests."
+
+  - id: dotnet_vulnerable
+    language: csharp
+    category: security
+    kind: project
+    command: "dotnet list package --vulnerable --include-transitive"
+    configured_by: []
+    blocking_if_present: false
+    severity: 4
+    since: 1
+    why: "Known-vulnerable NuGet packages."
+
+  # ------------------------------------------------------------------ rust
+  - id: clippy
+    language: rust
+    category: lint
+    kind: project
+    command: "cargo clippy --all-targets --message-format=json -- -D warnings"
+    configured_by: ["file:clippy.toml", "file:.clippy.toml"]
+    blocking_if_present: true
+    severity: 2
+    since: 2
+    why: "Rust lints; JSON messages feed findings."
+
+  - id: rustfmt
+    language: rust
+    category: format
+    kind: project
+    command: "cargo fmt --all --check"
+    configured_by: ["file:rustfmt.toml", "file:.rustfmt.toml"]
+    blocking_if_present: true
+    severity: 1
+    since: 2
+    why: "Formatting drift check."
+
+  - id: cargo_test
+    language: rust
+    category: unit
+    kind: project
+    command: "cargo test"
+    configured_by: []
+    blocking_if_present: true
+    severity: 3
+    since: 2
+    why: "Runs the unit and integration tests."
+
+  - id: cargo_audit
+    language: rust
+    category: security
+    kind: tool
+    package: cargo-audit
+    version: "0.22.2"
+    command: "cargo audit --json"
+    configured_by: []
+    blocking_if_present: false
+    severity: 4
+    since: 2
+    why: "Crates with known vulnerabilities (RustSec); JSON output feeds findings."
+
+  # ------------------------------------------------------------------ ruby
+  - id: rubocop
+    language: ruby
+    category: lint
+    kind: project
+    command: "rubocop --format json"
+    when: { has_any: [{ has_file: ".rubocop.yml" }, { has_dep: rubocop }] }
+    configured_by: ["file:.rubocop.yml", "dep:rubocop"]
+    blocking_if_present: true
+    severity: 2
+    since: 2
+    why: "Lint and style with the repo's RuboCop setup; JSON output feeds findings."
+
+  - id: rspec
+    language: ruby
+    category: unit
+    kind: project
+    command: "rspec"
+    when: { has_any: [{ has_dep: rspec }, { has_dep: rspec-rails }, { has_dir: spec }] }
+    configured_by: ["dep:rspec", "dep:rspec-rails", "file:.rspec"]
+    blocking_if_present: true
+    severity: 3
+    since: 2
+    why: "Runs the RSpec suite."
+
+  - id: rake_test
+    language: ruby
+    category: unit
+    kind: project
+    command: "rake test"
+    when: { has_dir: test, has_file: Rakefile }
+    configured_by: ["file:Rakefile"]
+    blocking_if_present: true
+    severity: 3
+    since: 2
+    why: "Runs the Minitest/Test::Unit suite through Rake."
+
+  - id: bundler_audit
+    language: ruby
+    category: security
+    kind: tool
+    package: bundler-audit
+    version: "0.9.3"
+    command: "bundle-audit check --update"
+    configured_by: []
+    blocking_if_present: false
+    severity: 4
+    since: 2
+    why: "Gems with known vulnerabilities in Gemfile.lock."
+
+  - id: brakeman
+    language: ruby
+    category: security
+    kind: tool
+    package: brakeman
+    version: "8.1.0"
+    command: "brakeman -q -f json"
+    when: { has_dep: rails }
+    configured_by: []
+    blocking_if_present: false
+    severity: 4
+    since: 2
+    why: "Rails SAST; JSON output feeds findings."
+
+  # ------------------------------------------------------------------- php
+  - id: phpstan
+    language: php
+    category: types
+    kind: project
+    command: "phpstan analyse --no-progress --error-format=json"
+    when: { has_any: [{ has_file: "phpstan.neon*" }, { has_dep: phpstan/phpstan }] }
+    configured_by: ["file:phpstan.neon*", "dep:phpstan/phpstan"]
+    blocking_if_present: true
+    severity: 2
+    since: 2
+    why: "Static analysis with the repo's PHPStan setup; JSON output feeds findings."
+
+  - id: php_cs_fixer
+    language: php
+    category: format
+    kind: project
+    command: "php-cs-fixer fix --dry-run --diff"
+    when: { has_any: [{ has_file: ".php-cs-fixer*.php" }, { has_dep: friendsofphp/php-cs-fixer }] }
+    configured_by: ["file:.php-cs-fixer*.php", "dep:friendsofphp/php-cs-fixer"]
+    blocking_if_present: true
+    severity: 1
+    since: 2
+    why: "Formatting drift check with the repo's PHP-CS-Fixer setup."
+
+  - id: phpunit
+    language: php
+    category: unit
+    kind: project
+    command: "phpunit"
+    when: { has_any: [{ has_file: "phpunit.xml*" }, { has_dep: phpunit/phpunit }] }
+    configured_by: ["file:phpunit.xml*", "dep:phpunit/phpunit"]
+    blocking_if_present: true
+    severity: 3
+    since: 2
+    why: "Runs the PHPUnit suite."
+
+  - id: composer_audit
+    language: php
+    category: security
+    kind: project
+    command:
+      default: "composer audit --format=json"
+    configured_by: []
+    blocking_if_present: false
+    severity: 4
+    since: 2
+    why: "Packages with known vulnerabilities; JSON output feeds findings."
+
+  # ----------------------------------------------------------------- swift
+  - id: swift_format
+    language: swift
+    category: format
+    kind: project
+    command: "swift format lint --recursive --strict ."
+    configured_by: ["file:.swift-format"]
+    blocking_if_present: true
+    severity: 1
+    since: 2
+    why: "Formatting drift check with the toolchain's swift-format."
+
+  - id: swift_test
+    language: swift
+    category: unit
+    kind: project
+    command: "swift test"
+    configured_by: []
+    blocking_if_present: true
+    severity: 3
+    since: 2
+    why: "Builds and runs the SwiftPM tests."
+
+  # ------------------------------------------------------------------- cpp
+  - id: cppcheck
+    language: cpp
+    category: lint
+    kind: project
+    command: "cppcheck --enable=warning,style,performance,portability --error-exitcode=1 -q -i build ."
+    configured_by: []
+    blocking_if_present: true
+    severity: 2
+    since: 2
+    why: "C/C++ static analysis for bugs and undefined behavior."
+
+  - id: clang_format
+    language: cpp
+    category: format
+    kind: project
+    command: 'find . -path ./build -prune -o -type f \( -name "*.c" -o -name "*.cc" -o -name "*.cpp" -o -name "*.cxx" -o -name "*.h" -o -name "*.hh" -o -name "*.hpp" \) -print | xargs -r clang-format --dry-run --Werror'
+    when: { has_file: ".clang-format" }
+    configured_by: ["file:.clang-format"]
+    blocking_if_present: true
+    severity: 1
+    since: 2
+    why: "Formatting drift check with the repo's .clang-format."
+
+  - id: ctest
+    language: cpp
+    category: unit
+    kind: project
+    command: "cmake --build build && ctest --test-dir build --output-on-failure"
+    configured_by: []
+    blocking_if_present: true
+    severity: 3
+    since: 2
+    why: "Builds the project and runs the CTest suite."
+
+  # -------------------------------------------------------------- solidity
+  - id: forge_fmt
+    language: solidity
+    category: format
+    kind: project
+    command: "forge fmt --check"
+    configured_by: []
+    blocking_if_present: true
+    severity: 1
+    since: 2
+    why: "Formatting drift check."
+
+  - id: forge_test
+    language: solidity
+    category: unit
+    kind: project
+    command: "forge test"
+    configured_by: []
+    blocking_if_present: true
+    severity: 3
+    since: 2
+    why: "Compiles the contracts and runs the Foundry tests."
+
+  # ------------------------------------------------------------ dockerfile
+  # Cross-cutting: applies to any repo with a Dockerfile, but only where a Python
+  # toolchain is part of the profile (checkov is fetched with uvx / pip).
+  - id: checkov_dockerfile
+    language: dockerfile
+    category: security
+    kind: python-tool
+    package: checkov
+    version: "3.3.29"
+    command: "checkov -d . --framework dockerfile -o json"
+    when: { has_file: "Dockerfile*" }
+    configured_by: []
+    blocking_if_present: false
+    severity: 3
+    since: 1
+    why: "Dockerfile misconfiguration scan; JSON output feeds findings."
