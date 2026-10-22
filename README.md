@@ -17,6 +17,9 @@ MCP client config:
 { "mcpServers": { "satori": { "command": "npx", "args": ["-y", "github:satorici/satori-mcp"] } } }
 ```
 
+Agent setup (Cursor, Claude Code, Codex), verification rules, and using Satori as a
+subagent after implementing a feature: https://docs-v2.satori.ci/modes/mcp
+
 Pin a version with `github:satorici/satori-mcp#<tag-or-sha>`. npx caches git installs, so to
 pick up new commits on `main` use an explicit ref or clear the cache (`npm cache clean --force`).
 
