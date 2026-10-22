@@ -44,6 +44,12 @@ it("exposes every tool, resource and prompt of the Python server", async () => {
       "list_advisories",
       "list_monitors",
       "list_repos",
+      "create_ssh_session",
+      "get_ssh_session",
+      "list_ssh_sessions",
+      "exec_in_session",
+      "stop_ssh_session",
+      "ssh_into_execution",
     ].sort(),
   );
   const scan = listed.find((t) => t.name === "scan_repository")!;
@@ -51,6 +57,8 @@ it("exposes every tool, resource and prompt of the Python server", async () => {
   const listExecutions = listed.find((t) => t.name === "list_executions")!;
   expect(Object.keys(listExecutions.inputSchema.properties!)).toContain("from_");
   expect(listExecutions.inputSchema.required ?? []).toEqual([]);
+  const exec = listed.find((t) => t.name === "exec_in_session")!;
+  expect(exec.inputSchema.required).toEqual(["session_id", "command"]);
 
   const { resources } = await client.listResources();
   expect(resources.map((r) => r.uri).sort()).toEqual(

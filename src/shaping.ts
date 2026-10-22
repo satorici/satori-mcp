@@ -205,6 +205,22 @@ export function summarizeJob(job: Dict): Dict {
   };
 }
 
+/** SSH session without its SSH token: exec_in_session never needs it. */
+export function summarizeSshSession(session: Dict): Dict {
+  return {
+    id: session.id ?? null,
+    status: session.status ?? null,
+    region: session.region ?? null,
+    regions: session.regions ?? null,
+    host: session.host ?? null,
+    container_settings: session.container_settings ?? null,
+    timeout: session.timeout ?? null,
+    save_files: session.save_files ?? null,
+    created_at: session.created_at ?? null,
+    finished_at: session.finished_at ?? null,
+  };
+}
+
 /** Last MAX_TIMELINE_ITEMS entries (comments and events), clipped. */
 export function summarizeTimeline(items: Dict[]): Dict {
   const shaped = items.slice(-MAX_TIMELINE_ITEMS).map((item) => {

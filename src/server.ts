@@ -25,6 +25,9 @@ export const INSTRUCTIONS =
   "call again with `prefs`, and write files only with their approval. " +
   "Before editing code, run_local .satori-llm.yml once as a baseline; afterwards fix " +
   "only failures that were not in the baseline. " +
+  "create_ssh_session starts a remote sandbox container: run commands in it with " +
+  "exec_in_session and always stop_ssh_session when done. ssh_into_execution returns " +
+  "short-lived SSH credentials for a RUNNING execution (live debugging). " +
   "Output is always capped.";
 
 const int = () => z.number().int();
@@ -344,6 +347,75 @@ Returns titles and links (external_url), not the full advisory text.`,
 order: ASC or DESC by last activity.`,
     { order: optStr(), ...paging(50) },
     (args) => tools.listRepos(args),
+  );
+
+  tool(
+    "create_ssh_session",
+    `Start a remote sandbox container on Satori and (optionally) wait until it accepts commands
+(READY with a host; startup can take a few minutes).
+
+Container settings are optional: cpu (256, 512, 1024, 2048, 4096, 8192 or 16384; default 1024),
+memory in MiB (default 2048; must be a valid Fargate pair with cpu), storage in GiB (20-200),
+image (default ubuntu:noble), os (linux or windows), environment_variables.
+\`regions\` limits where it may run; \`timeout\` is the session lifetime in seconds.
+With save_files, changed files are kept after the session stops.
+Then run commands with exec_in_session, and ALWAYS call stop_ssh_session when done.`,
+    {
+      cpu: optInt(),
+      memory: optInt(),
+      storage: optInt(),
+      image: optStr(),
+      os: z.enum(["linux", "windows"]).nullish(),
+      environment_variables: z.record(z.string(), z.string()).nullish(),
+      regions: z.array(z.string()).nullish(),
+      timeout: optInt(),
+      save_files: z.boolean().default(false),
+      wait: z.boolean().default(true),
+      wait_seconds: int().default(300),
+    },
+    (args) => tools.createSshSession(args),
+  );
+
+  tool(
+    "get_ssh_session",
+    "Status (PREPARING, READY or FINISHED), region and settings of an SSH session.",
+    { session_id: int() },
+    (args) => tools.getSshSession(args),
+  );
+
+  tool(
+    "list_ssh_sessions",
+    "List SSH sessions, newest first.",
+    { ...paging(10) },
+    (args) => tools.listSshSessions(args),
+  );
+
+  tool(
+    "exec_in_session",
+    `Run a shell command in a READY SSH session and return stdout, stderr and return_code.
+
+Each call is a fresh shell (no state between calls except the filesystem); stdin is closed.
+\`timeout\` is in seconds (1-3600, default 60); on timeout the command is killed and
+timed_out is true. Output is capped.`,
+    { session_id: int(), command: z.string().min(1), timeout: int().default(60) },
+    (args) => tools.execInSession(args),
+  );
+
+  tool(
+    "stop_ssh_session",
+    "Stop an SSH session and release its container. Stopping is asynchronous.",
+    { session_id: int() },
+    (args) => tools.stopSshSession(args),
+  );
+
+  tool(
+    "ssh_into_execution",
+    `Short-lived (5 min) SSH credentials for a RUNNING execution, for live debugging.
+
+Returns host, username and a password token for an interactive shell; this tool cannot
+run commands itself. Only call it when the user asks to debug a running execution.`,
+    { execution_id: int() },
+    (args) => tools.sshIntoExecution(args),
   );
 
   const docs: [string, string, string][] = [

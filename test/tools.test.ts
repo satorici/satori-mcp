@@ -10,7 +10,7 @@ import * as tools from "../src/tools.js";
 
 type Handler = (url: string, arg?: any) => any;
 
-function mockClient(method: "get" | "post" | "patch" | "getText" | "postForm", handler: Handler) {
+function mockClient(method: "get" | "post" | "patch" | "getText" | "postForm" | "request", handler: Handler) {
   return vi.spyOn(client, method).mockImplementation((async (url: string, arg?: any) => handler(url, arg)) as any);
 }
 
@@ -21,7 +21,7 @@ beforeEach(() => {
   vi.spyOn(tools.deps, "sleep").mockResolvedValue(undefined);
   vi.spyOn(BundleCache, "getBundleId").mockReturnValue(undefined);
   vi.spyOn(BundleCache, "setBundleId").mockReturnValue(undefined);
-  for (const method of ["get", "post", "patch", "getText", "postForm"] as const) {
+  for (const method of ["get", "post", "patch", "getText", "postForm", "request"] as const) {
     vi.spyOn(client, method).mockRejectedValue(new Error(`unexpected client.${method}`));
   }
 });
@@ -485,5 +485,114 @@ describe("run_local", () => {
     expect(runLocalJob.mock.calls[0][0]).toBe("bundle://b1");
     expect(runLocalJob.mock.calls[0][1]).toMatchObject({ workdir: tmp, run: ["a"], timeout: 300 });
     expect(write).not.toHaveBeenCalled();
+  });
+});
+
+describe("create_ssh_session", () => {
+  it("drops unset settings, polls until READY and strips the token", async () => {
+    const post = mockClient("post", () => ({ id: 5, status: "PREPARING" }));
+    const states = [{ status: "PREPARING" }, { status: "READY" }, { status: "READY", host: "10.0.0.1", token: "jwt" }];
+    const get = mockClient("get", (url) => {
+      expect(url).toBe("/ssh_sessions/5");
+      return { id: 5, ...states.shift() };
+    });
+    const result = await tools.createSshSession({ cpu: 512, memory: null, image: "alpine", regions: [] });
+    expect(post).toHaveBeenCalledWith("/ssh_sessions", {
+      save_files: false,
+      container_settings: { cpu: 512, image: "alpine" },
+    });
+    expect(get).toHaveBeenCalledTimes(3);
+    expect(result.status).toBe("READY");
+    expect(result.host).toBe("10.0.0.1");
+    expect(result).not.toHaveProperty("token");
+    expect(result.hint).toContain("exec_in_session");
+  });
+
+  it("returns a hint when still PREPARING after wait_seconds", async () => {
+    mockClient("post", () => ({ id: 5, status: "PREPARING" }));
+    mockClient("get", () => ({ id: 5, status: "PREPARING" }));
+    let t = 0;
+    vi.spyOn(tools.deps, "now").mockImplementation(() => (t += 1000));
+    const result = await tools.createSshSession({ wait_seconds: 3 });
+    expect(result.status).toBe("PREPARING");
+    expect(result.hint).toContain("get_ssh_session");
+  });
+
+  it("treats READY without a host as still starting", async () => {
+    mockClient("get", () => ({ id: 5, status: "READY", host: null }));
+    expect((await tools.getSshSession({ session_id: 5 })).hint).toContain("no host yet");
+  });
+});
+
+describe("list_ssh_sessions", () => {
+  it("pages summarized sessions", async () => {
+    const get = mockClient("get", () => ({ total: 11, items: [{ id: 1, status: "FINISHED", token: "x" }] }));
+    const result = await tools.listSshSessions({});
+    expect(get).toHaveBeenCalledWith("/ssh_sessions", { quantity: 10, page: 1 });
+    expect(result.items[0]).not.toHaveProperty("token");
+    expect(result.next_page).toBe(2);
+  });
+});
+
+describe("exec_in_session", () => {
+  const respond = (body: string) => ({ json: async () => JSON.parse(body) }) as Response;
+
+  it("allows for the command timeout and parses keepalive-prefixed JSON", async () => {
+    const request = vi.spyOn(client, "request").mockResolvedValue(
+      respond(`   ${JSON.stringify({ stdout: "hi\n", stderr: "", return_code: 0, timed_out: false, truncated: false, duration: 0.1 })}`),
+    );
+    const result = await tools.execInSession({ session_id: 3, command: "echo hi", timeout: 90 });
+    expect(request).toHaveBeenCalledWith("POST", "/ssh_sessions/3/exec", {
+      json: { command: "echo hi", timeout: 90 },
+      timeoutMs: 120_000,
+    });
+    expect(result).toMatchObject({ return_code: 0, stdout: "hi\n", timed_out: false, truncated: false });
+  });
+
+  it("surfaces an error sent after the stream started", async () => {
+    vi.spyOn(client, "request").mockResolvedValue(respond('{"error": "boom"}'));
+    expect(await tools.execInSession({ session_id: 3, command: "x" })).toEqual({ session_id: 3, error: "boom" });
+  });
+
+  it("caps long output", async () => {
+    const stdout = "a".repeat(shaping.MAX_OUTPUT_CHARS + 10);
+    vi.spyOn(client, "request").mockResolvedValue(respond(JSON.stringify({ stdout, stderr: "", return_code: 0 })));
+    const result = await tools.execInSession({ session_id: 3, command: "x" });
+    expect(result.stdout).toContain("chars truncated");
+    expect(result.truncated).toBe(true);
+  });
+});
+
+describe("stop_ssh_session", () => {
+  it("accepts an empty 202", async () => {
+    const request = vi.spyOn(client, "request").mockResolvedValue(new Response(null, { status: 202 }));
+    expect((await tools.stopSshSession({ session_id: 4 })).stopped).toBe(true);
+    expect(request).toHaveBeenCalledWith("POST", "/ssh_sessions/4/stop");
+  });
+
+  it("reports an already finished session", async () => {
+    vi.spyOn(client, "request").mockRejectedValue(new HttpStatusError(409, "finished", "http://x"));
+    expect(await tools.stopSshSession({ session_id: 4 })).toMatchObject({ stopped: false, status: "FINISHED" });
+  });
+});
+
+describe("ssh_into_execution", () => {
+  it("returns short-lived credentials", async () => {
+    mockClient("get", (url) => {
+      expect(url).toBe("/executions/8/ssh");
+      return { host: "1.2.3.4", token: "jwt" };
+    });
+    expect(await tools.sshIntoExecution({ execution_id: 8 })).toMatchObject({
+      host: "1.2.3.4",
+      username: "root",
+      password: "jwt",
+    });
+  });
+
+  it("explains when the execution is not running", async () => {
+    mockClient("get", () => {
+      throw new HttpStatusError(503, "Execution not running", "http://x");
+    });
+    expect(await tools.sshIntoExecution({ execution_id: 8 })).toEqual({ error: "Execution not running", status: 503 });
   });
 });

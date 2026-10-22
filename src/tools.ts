@@ -702,6 +702,135 @@ export const listRepos = safe(async (args: { order?: string | null; quantity?: n
   return shaping.paged(data.items.map(shaping.summarizeRepo), data.total, page, quantity);
 });
 
+export const SSH_EXEC_MAX_TIMEOUT = 3600;
+/** Margin over the command timeout for connecting and returning the result. */
+const SSH_EXEC_GRACE_MS = 30_000;
+/** Lifetime of the JWT from GET /executions/{id}/ssh. */
+const SSH_TOKEN_TTL_SECONDS = 300;
+
+export interface CreateSshSessionArgs {
+  cpu?: number | null;
+  memory?: number | null;
+  storage?: number | null;
+  image?: string | null;
+  os?: string | null;
+  environment_variables?: Record<string, string> | null;
+  regions?: string[] | null;
+  timeout?: number | null;
+  save_files?: boolean;
+  wait?: boolean;
+  wait_seconds?: number;
+}
+
+export const createSshSession = safe(async (args: CreateSshSessionArgs = {}): Promise<Dict> => {
+  const { wait = true, wait_seconds: waitSeconds = 300 } = args;
+  const settings: Dict = {
+    cpu: args.cpu,
+    memory: args.memory,
+    storage: args.storage,
+    image: args.image,
+    os: args.os,
+    environment_variables: args.environment_variables,
+  };
+  const containerSettings = Object.fromEntries(
+    Object.entries(settings).filter(([, v]) => v !== null && v !== undefined),
+  );
+  const body: Dict = { save_files: args.save_files ?? false };
+  if (Object.keys(containerSettings).length) body.container_settings = containerSettings;
+  if (args.regions?.length) body.regions = args.regions;
+  if (args.timeout !== null && args.timeout !== undefined) body.timeout = args.timeout;
+
+  let session = await client.post("/ssh_sessions", body);
+  const deadline = deps.now() + clamp(waitSeconds, 0, 600) * 1000;
+  while (wait && sshSessionStarting(session) && deps.now() < deadline) {
+    await deps.sleep(2000);
+    session = await client.get(`/ssh_sessions/${session.id}`);
+  }
+  return sshSessionResult(session);
+});
+
+/** READY only means the task was launched; commands work once the task's host is known. */
+const sshSessionStarting = (session: Dict) =>
+  session.status === "PREPARING" || (session.status === "READY" && !session.host);
+
+function sshSessionResult(session: Dict): Dict {
+  const result = shaping.summarizeSshSession(session);
+  if (sshSessionStarting(session)) {
+    result.hint = "Still starting (no host yet; this can take a few minutes). Call get_ssh_session(session_id) later.";
+  } else if (session.status === "READY") {
+    result.hint = "Run commands with exec_in_session(session_id, command). Call stop_ssh_session when done.";
+  }
+  return result;
+}
+
+export const getSshSession = safe(async ({ session_id: id }: { session_id: number }): Promise<Dict> =>
+  sshSessionResult(await client.get(`/ssh_sessions/${id}`)),
+);
+
+export const listSshSessions = safe(async ({ quantity = 10, page = 1 }: { quantity?: number; page?: number } = {}) => {
+  quantity = clamp(quantity, 1, 25);
+  const data = await client.get("/ssh_sessions", { quantity, page });
+  return shaping.paged(data.items.map(shaping.summarizeSshSession), data.total, page, quantity);
+});
+
+export interface ExecInSessionArgs {
+  session_id: number;
+  command: string;
+  timeout?: number;
+}
+
+export const execInSession = safe(async (args: ExecInSessionArgs): Promise<Dict> => {
+  const { session_id: id, command } = args;
+  const timeout = clamp(args.timeout ?? 60, 1, SSH_EXEC_MAX_TIMEOUT);
+  // The API streams keepalive spaces before the JSON result; JSON parsing skips them.
+  const response = await client.request("POST", `/ssh_sessions/${id}/exec`, {
+    json: { command, timeout },
+    timeoutMs: timeout * 1000 + SSH_EXEC_GRACE_MS,
+  });
+  const result = (await response.json()) as Dict;
+  // Failures after the stream started still arrive as HTTP 200.
+  if (result.error) return { session_id: id, error: shaping.clip(result.error, 2000) };
+  return {
+    session_id: id,
+    return_code: result.return_code ?? null,
+    stdout: shaping.clip(result.stdout ?? "", shaping.MAX_OUTPUT_CHARS),
+    stderr: shaping.clip(result.stderr ?? "", shaping.MAX_OUTPUT_CHARS),
+    timed_out: result.timed_out ?? false,
+    truncated:
+      Boolean(result.truncated) ||
+      String(result.stdout ?? "").length > shaping.MAX_OUTPUT_CHARS ||
+      String(result.stderr ?? "").length > shaping.MAX_OUTPUT_CHARS,
+    duration: result.duration ?? null,
+  };
+});
+
+export const stopSshSession = safe(async ({ session_id: id }: { session_id: number }): Promise<Dict> => {
+  try {
+    // 202 with an empty body, so no .json().
+    await client.request("POST", `/ssh_sessions/${id}/stop`);
+  } catch (e) {
+    if (e instanceof HttpStatusError && e.status === 409) {
+      return { session_id: id, status: "FINISHED", stopped: false, hint: "The session already finished." };
+    }
+    throw e;
+  }
+  return { session_id: id, stopped: true, hint: "Stopping is asynchronous; call get_ssh_session to confirm FINISHED." };
+});
+
+export const sshIntoExecution = safe(async ({ execution_id: id }: { execution_id: number }): Promise<Dict> => {
+  const { host, token } = await client.get(`/executions/${id}/ssh`);
+  return {
+    execution_id: id,
+    host,
+    username: "root",
+    password: token,
+    expires_in_seconds: SSH_TOKEN_TTL_SECONDS,
+    hint:
+      "Short-lived SSH credentials for an interactive shell; the MCP cannot host a TTY. " +
+      `Have the user run: satori-v2 shell ${id}`,
+  };
+});
+
 export async function fetchDoc(name: string): Promise<string> {
   const url = `${DOCS_URL}/${DOC_PAGES[name]}.md`;
   try {
