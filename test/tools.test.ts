@@ -536,8 +536,10 @@ describe("list_ssh_sessions", () => {
 
 describe("exec_in_session", () => {
   const respond = (body: string) => ({ json: async () => JSON.parse(body) }) as Response;
+  const readySession = { id: 3, status: "READY", host: "10.0.0.1" };
 
   it("allows for the command timeout and parses keepalive-prefixed JSON", async () => {
+    mockClient("get", () => readySession);
     const request = vi.spyOn(client, "request").mockResolvedValue(
       respond(`   ${JSON.stringify({ stdout: "hi\n", stderr: "", return_code: 0, timed_out: false, truncated: false, duration: 0.1 })}`),
     );
@@ -550,16 +552,66 @@ describe("exec_in_session", () => {
   });
 
   it("surfaces an error sent after the stream started", async () => {
+    mockClient("get", () => readySession);
     vi.spyOn(client, "request").mockResolvedValue(respond('{"error": "boom"}'));
     expect(await tools.execInSession({ session_id: 3, command: "x" })).toEqual({ session_id: 3, error: "boom" });
   });
 
   it("caps long output", async () => {
+    mockClient("get", () => readySession);
     const stdout = "a".repeat(shaping.MAX_OUTPUT_CHARS + 10);
     vi.spyOn(client, "request").mockResolvedValue(respond(JSON.stringify({ stdout, stderr: "", return_code: 0 })));
     const result = await tools.execInSession({ session_id: 3, command: "x" });
     expect(result.stdout).toContain("chars truncated");
     expect(result.truncated).toBe(true);
+  });
+
+  it("polls until READY with a host, then runs the command", async () => {
+    const states = [
+      { id: 3, status: "READY", host: null },
+      { id: 3, status: "READY", host: null },
+      { id: 3, status: "READY", host: "10.0.0.1" },
+    ];
+    const get = mockClient("get", () => states.shift());
+    const request = vi.spyOn(client, "request").mockResolvedValue(
+      respond(JSON.stringify({ stdout: "ok\n", stderr: "", return_code: 0 })),
+    );
+    const result = await tools.execInSession({ session_id: 3, command: "echo ok" });
+    expect(get).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ return_code: 0, stdout: "ok\n" });
+  });
+
+  it("returns a clear error when still starting after the ready wait", async () => {
+    mockClient("get", () => ({ id: 3, status: "READY", host: null }));
+    let calls = 0;
+    vi.spyOn(tools.deps, "now").mockImplementation(() => {
+      calls += 1;
+      // Deadline from first call; later calls are past it so the wait exits immediately.
+      return calls === 1 ? 0 : tools.SSH_EXEC_READY_WAIT_MS + 1;
+    });
+    const request = vi.spyOn(client, "request");
+    expect(await tools.execInSession({ session_id: 3, command: "x" })).toMatchObject({
+      session_id: 3,
+      error: "SSH session still starting (no host yet)",
+      status: "READY",
+      host: null,
+      hint: expect.stringContaining("get_ssh_session"),
+    });
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("maps a late 503 host-unavailable to the still-starting error", async () => {
+    mockClient("get", () => readySession);
+    vi.spyOn(client, "request").mockRejectedValue(
+      new HttpStatusError(503, '{"status_code":503,"detail":"SSH host unavailable"}', "http://x"),
+    );
+    expect(await tools.execInSession({ session_id: 3, command: "x" })).toMatchObject({
+      session_id: 3,
+      error: "SSH session still starting (no host yet)",
+      status: "READY",
+      host: "10.0.0.1",
+    });
   });
 });
 

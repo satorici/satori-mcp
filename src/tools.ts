@@ -705,6 +705,8 @@ export const listRepos = safe(async (args: { order?: string | null; quantity?: n
 export const SSH_EXEC_MAX_TIMEOUT = 3600;
 /** Margin over the command timeout for connecting and returning the result. */
 const SSH_EXEC_GRACE_MS = 30_000;
+/** How long exec_in_session waits for READY+host before giving up. */
+export const SSH_EXEC_READY_WAIT_MS = 120_000;
 /** Lifetime of the JWT from GET /executions/{id}/ssh. */
 const SSH_TOKEN_TTL_SECONDS = 300;
 
@@ -741,10 +743,8 @@ export const createSshSession = safe(async (args: CreateSshSessionArgs = {}): Pr
   if (args.timeout !== null && args.timeout !== undefined) body.timeout = args.timeout;
 
   let session = await client.post("/ssh_sessions", body);
-  const deadline = deps.now() + clamp(waitSeconds, 0, 600) * 1000;
-  while (wait && sshSessionStarting(session) && deps.now() < deadline) {
-    await deps.sleep(2000);
-    session = await client.get(`/ssh_sessions/${session.id}`);
+  if (wait) {
+    session = await waitForSshSession(session.id, deps.now() + clamp(waitSeconds, 0, 600) * 1000, session);
   }
   return sshSessionResult(session);
 });
@@ -752,6 +752,34 @@ export const createSshSession = safe(async (args: CreateSshSessionArgs = {}): Pr
 /** READY only means the task was launched; commands work once the task's host is known. */
 const sshSessionStarting = (session: Dict) =>
   session.status === "PREPARING" || (session.status === "READY" && !session.host);
+
+const sshSessionReady = (session: Dict) => session.status === "READY" && Boolean(session.host);
+
+/** Poll until the session has a host, finishes, or the deadline passes. */
+async function waitForSshSession(id: number, deadlineMs: number, initial?: Dict): Promise<Dict> {
+  let session: Dict = initial ?? (await client.get<Dict>(`/ssh_sessions/${id}`));
+  while (sshSessionStarting(session) && deps.now() < deadlineMs) {
+    await deps.sleep(2000);
+    session = await client.get<Dict>(`/ssh_sessions/${id}`);
+  }
+  return session;
+}
+
+function sshSessionNotReadyResult(id: number, session: Dict): Dict {
+  return {
+    session_id: id,
+    error: "SSH session still starting (no host yet)",
+    status: session.status ?? null,
+    host: session.host ?? null,
+    hint: "Call get_ssh_session later, then retry exec_in_session.",
+  };
+}
+
+function isSshNotReadyError(e: HttpStatusError): boolean {
+  if (e.status !== 503) return false;
+  const text = e.text.toLowerCase();
+  return text.includes("ssh host unavailable") || text.includes("session not ready");
+}
 
 function sshSessionResult(session: Dict): Dict {
   const result = shaping.summarizeSshSession(session);
@@ -782,26 +810,37 @@ export interface ExecInSessionArgs {
 export const execInSession = safe(async (args: ExecInSessionArgs): Promise<Dict> => {
   const { session_id: id, command } = args;
   const timeout = clamp(args.timeout ?? 60, 1, SSH_EXEC_MAX_TIMEOUT);
-  // The API streams keepalive spaces before the JSON result; JSON parsing skips them.
-  const response = await client.request("POST", `/ssh_sessions/${id}/exec`, {
-    json: { command, timeout },
-    timeoutMs: timeout * 1000 + SSH_EXEC_GRACE_MS,
-  });
-  const result = (await response.json()) as Dict;
-  // Failures after the stream started still arrive as HTTP 200.
-  if (result.error) return { session_id: id, error: shaping.clip(result.error, 2000) };
-  return {
-    session_id: id,
-    return_code: result.return_code ?? null,
-    stdout: shaping.clip(result.stdout ?? "", shaping.MAX_OUTPUT_CHARS),
-    stderr: shaping.clip(result.stderr ?? "", shaping.MAX_OUTPUT_CHARS),
-    timed_out: result.timed_out ?? false,
-    truncated:
-      Boolean(result.truncated) ||
-      String(result.stdout ?? "").length > shaping.MAX_OUTPUT_CHARS ||
-      String(result.stderr ?? "").length > shaping.MAX_OUTPUT_CHARS,
-    duration: result.duration ?? null,
-  };
+
+  const session = await waitForSshSession(id, deps.now() + SSH_EXEC_READY_WAIT_MS);
+  if (!sshSessionReady(session)) return sshSessionNotReadyResult(id, session);
+
+  try {
+    // The API streams keepalive spaces before the JSON result; JSON parsing skips them.
+    const response = await client.request("POST", `/ssh_sessions/${id}/exec`, {
+      json: { command, timeout },
+      timeoutMs: timeout * 1000 + SSH_EXEC_GRACE_MS,
+    });
+    const result = (await response.json()) as Dict;
+    // Failures after the stream started still arrive as HTTP 200.
+    if (result.error) return { session_id: id, error: shaping.clip(result.error, 2000) };
+    return {
+      session_id: id,
+      return_code: result.return_code ?? null,
+      stdout: shaping.clip(result.stdout ?? "", shaping.MAX_OUTPUT_CHARS),
+      stderr: shaping.clip(result.stderr ?? "", shaping.MAX_OUTPUT_CHARS),
+      timed_out: result.timed_out ?? false,
+      truncated:
+        Boolean(result.truncated) ||
+        String(result.stdout ?? "").length > shaping.MAX_OUTPUT_CHARS ||
+        String(result.stderr ?? "").length > shaping.MAX_OUTPUT_CHARS,
+      duration: result.duration ?? null,
+    };
+  } catch (e) {
+    if (e instanceof HttpStatusError && isSshNotReadyError(e)) {
+      return sshSessionNotReadyResult(id, session);
+    }
+    throw e;
+  }
 });
 
 export const stopSshSession = safe(async ({ session_id: id }: { session_id: number }): Promise<Dict> => {
