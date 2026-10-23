@@ -242,6 +242,7 @@ export interface PlaybookSourceArgs {
 export interface RunPlaybookArgs extends PlaybookSourceArgs {
   repository?: string | null;
   parameters?: Record<string, string[]> | null;
+  secrets?: Record<string, string> | null;
   regions?: string[] | null;
   wait?: boolean;
   wait_seconds?: number;
@@ -253,6 +254,7 @@ export const runPlaybook = safe(async (args: RunPlaybookArgs = {}): Promise<Dict
   const run = await client.post("/jobs/runs", {
     playbook_source: source,
     parameters: args.parameters || {},
+    secrets: args.secrets || {},
     regions: args.regions || [],
     count: 1,
     save_report: true,
@@ -586,6 +588,7 @@ export const getJob = safe(async ({ job_id: id }: { job_id: number }): Promise<D
 export interface ScanRepositoryArgs extends PlaybookSourceArgs {
   repository: string;
   parameters?: Record<string, string[]> | null;
+  secrets?: Record<string, string> | null;
   regions?: string[] | null;
   quantity?: number;
 }
@@ -601,6 +604,7 @@ export const scanRepository = safe(async (args: ScanRepositoryArgs): Promise<Dic
   const quantity = wildcard ? 1 : clamp(args.quantity ?? 1, 1, MAX_SCAN_QUANTITY);
   const body: Dict = {
     parameters: args.parameters || {},
+    secrets: args.secrets || {},
     regions: args.regions || [],
     repository_data: { repository },
     criteria: { quantity },
@@ -700,6 +704,48 @@ export const listRepos = safe(async (args: { order?: string | null; quantity?: n
   if (order) params.order = order;
   const data = await client.get("/repos", params);
   return shaping.paged(data.items.map(shaping.summarizeRepo), data.total, page, quantity);
+});
+
+/** `repository` ("owner/repo") scopes saved inputs to that repository's runs and scans. */
+const savedScope = (repository?: string | null): Dict => (repository ? { repository } : {});
+const savedPath = (kind: "parameters" | "secrets", name: string) =>
+  `/settings/${kind}/${encodeURIComponent(name)}`;
+
+export const listSavedInputs = safe(async ({ repository }: { repository?: string | null } = {}): Promise<Dict> => {
+  const params = savedScope(repository);
+  const [parameters, secrets] = await Promise.all([
+    client.get<Dict[]>("/settings/parameters", params),
+    client.get<Dict[]>("/settings/secrets", params),
+  ]);
+  return {
+    repository: repository ?? null,
+    parameters: parameters.map((p) => ({ name: p.name, values: p.values })),
+    secrets: secrets.map((s) => ({ name: s.name, created_at: s.created_at })),
+  };
+});
+
+export const saveParameter = safe(
+  async ({ name, values, repository }: { name: string; values: string[]; repository?: string | null }) => {
+    const saved = await client.put(savedPath("parameters", name), { values }, savedScope(repository));
+    return { ...saved, repository: repository ?? null };
+  },
+);
+
+export const deleteParameter = safe(async ({ name, repository }: { name: string; repository?: string | null }) => {
+  await client.delete(savedPath("parameters", name), savedScope(repository));
+  return { deleted: name, repository: repository ?? null };
+});
+
+export const saveSecret = safe(
+  async ({ name, value, repository }: { name: string; value: string; repository?: string | null }) => {
+    const saved = await client.put(savedPath("secrets", name), { value }, savedScope(repository));
+    return { name: saved.name, created_at: saved.created_at, repository: repository ?? null };
+  },
+);
+
+export const deleteSecret = safe(async ({ name, repository }: { name: string; repository?: string | null }) => {
+  await client.delete(savedPath("secrets", name), savedScope(repository));
+  return { deleted: name, repository: repository ?? null };
 });
 
 export const SSH_EXEC_MAX_TIMEOUT = 3600;

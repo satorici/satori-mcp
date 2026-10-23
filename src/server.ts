@@ -25,6 +25,9 @@ export const INSTRUCTIONS =
   "call again with `prefs`, and write files only with their approval. " +
   "Before editing code, run_local .satori-llm.yml once as a baseline; afterwards fix " +
   "only failures that were not in the baseline. " +
+  "Saved parameters/secrets (list_saved_inputs) are applied to every new job automatically; " +
+  "change them with save_parameter/save_secret/delete_* only when asked. " +
+  "Playbooks read both as ${{NAME}}. " +
   "create_ssh_session starts a remote sandbox container: run commands in it with " +
   "exec_in_session and always stop_ssh_session when done. ssh_into_execution returns " +
   "short-lived SSH credentials for a RUNNING execution (live debugging). " +
@@ -34,6 +37,7 @@ const int = () => z.number().int();
 const optStr = () => z.string().nullish();
 const optInt = () => int().nullish();
 const parameters = () => z.record(z.string(), z.array(z.string())).nullish();
+const secrets = () => z.record(z.string(), z.string()).nullish();
 const playbookSource = {
   playbook_path: optStr(),
   playbook_yaml: optStr(),
@@ -123,11 +127,14 @@ playbook_uri (a catalog playbook such as satori://code/python/pyspector_v2.yml; 
 If the run is still going after wait_seconds (max 600), call get_execution later.
 Playbook syntax: read the satori-docs://playbooks/language resource first.
 For security/analysis tools, prefer JSON/JSONL stdout flags
-(satori-docs://playbooks/tool-output).`,
+(satori-docs://playbooks/tool-output).
+\`secrets\` (NAME -> value) are read like parameters (\${{NAME}}) but never stored with
+the job and redacted from output; saved parameters/secrets are added automatically.`,
     {
       ...playbookSource,
       repository: optStr(),
       parameters: parameters(),
+      secrets: secrets(),
       regions: z.array(z.string()).nullish(),
       wait: z.boolean().default(true),
       wait_seconds: int().default(120),
@@ -288,11 +295,14 @@ satori://code/python/pyspector_v2.yml, see list_playbooks). When none are given,
 the API uses the repository root .satori.yml (each repository's own for "owner/*",
 skipping repositories without one). \`quantity\` is how many executions to create
 (max 10; always 1 per repository for "owner/*"). Poll with get_job(job_id) /
-list_executions(job_id=...); results via get_execution.`,
+list_executions(job_id=...); results via get_execution.
+\`secrets\` work as in run_playbook; saved parameters/secrets for each repository are
+added automatically.`,
     {
       repository: z.string(),
       ...playbookSource,
       parameters: parameters(),
+      secrets: secrets(),
       regions: z.array(z.string()).nullish(),
       quantity: int().default(1),
     },
@@ -347,6 +357,55 @@ Returns titles and links (external_url), not the full advisory text.`,
 order: ASC or DESC by last activity.`,
     { order: optStr(), ...paging(50) },
     (args) => tools.listRepos(args),
+  );
+
+  const savedRepository = { repository: optStr() };
+  const savedScopeDoc = `Without \`repository\` these are the user's own values, applied to every job;
+with "owner/repo" they apply only to that repository's runs and scans. Request values win
+over saved ones, and a repository's over the user's.`;
+
+  tool(
+    "list_saved_inputs",
+    `List saved parameters (with values) and saved secrets (names only; values are write-only).
+
+${savedScopeDoc}`,
+    savedRepository,
+    (args) => tools.listSavedInputs(args),
+  );
+
+  tool(
+    "save_parameter",
+    `Save (create or replace) a parameter added to every new job. Only when the user asks.
+
+Parameters are stored with each job and shown in its details: use save_secret for
+credentials. ${savedScopeDoc}`,
+    { name: z.string(), values: z.array(z.string()).min(1), ...savedRepository },
+    (args) => tools.saveParameter(args),
+  );
+
+  tool(
+    "delete_parameter",
+    "Delete a saved parameter (only when the user asks). `repository` selects the scope.",
+    { name: z.string(), ...savedRepository },
+    (args) => tools.deleteParameter(args),
+  );
+
+  tool(
+    "save_secret",
+    `Save (create or replace) a secret added to every new job. Only when the user asks.
+
+The value is encrypted and can't be read back; playbooks read it as \${{NAME}} and it is
+redacted from output. NAME: letters, digits and _, not starting with a digit.
+Local runs (run_local) don't get secrets. ${savedScopeDoc}`,
+    { name: z.string(), value: z.string().min(1), ...savedRepository },
+    (args) => tools.saveSecret(args),
+  );
+
+  tool(
+    "delete_secret",
+    "Delete a saved secret (only when the user asks). `repository` selects the scope.",
+    { name: z.string(), ...savedRepository },
+    (args) => tools.deleteSecret(args),
   );
 
   tool(

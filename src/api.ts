@@ -86,6 +86,15 @@ export class ApiClient {
     return (await this.request("PATCH", path, { json })).json() as Promise<T>;
   }
 
+  async put<T = any>(path: string, json: unknown, params?: Params): Promise<T> {
+    return (await this.request("PUT", path, { json, params })).json() as Promise<T>;
+  }
+
+  /** DELETE; the API answers 204 with no body. */
+  async delete(path: string, params?: Params): Promise<void> {
+    await this.request("DELETE", path, { params });
+  }
+
   /** Multipart POST; returns the response body as text. */
   async postForm(path: string, form: FormData): Promise<string> {
     return (await this.request("POST", path, { body: form })).text();

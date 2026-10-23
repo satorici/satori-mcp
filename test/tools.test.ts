@@ -10,8 +10,12 @@ import * as tools from "../src/tools.js";
 
 type Handler = (url: string, arg?: any) => any;
 
-function mockClient(method: "get" | "post" | "patch" | "getText" | "postForm" | "request", handler: Handler) {
-  return vi.spyOn(client, method).mockImplementation((async (url: string, arg?: any) => handler(url, arg)) as any);
+type Method = "get" | "post" | "patch" | "put" | "delete" | "getText" | "postForm" | "request";
+
+function mockClient(method: Method, handler: (url: string, arg?: any, arg2?: any) => any) {
+  return vi
+    .spyOn(client, method)
+    .mockImplementation((async (url: string, arg?: any, arg2?: any) => handler(url, arg, arg2)) as any);
 }
 
 let tmp: string;
@@ -21,7 +25,7 @@ beforeEach(() => {
   vi.spyOn(tools.deps, "sleep").mockResolvedValue(undefined);
   vi.spyOn(BundleCache, "getBundleId").mockReturnValue(undefined);
   vi.spyOn(BundleCache, "setBundleId").mockReturnValue(undefined);
-  for (const method of ["get", "post", "patch", "getText", "postForm", "request"] as const) {
+  for (const method of ["get", "post", "patch", "put", "delete", "getText", "postForm", "request"] as const) {
     vi.spyOn(client, method).mockRejectedValue(new Error(`unexpected client.${method}`));
   }
 });
@@ -76,6 +80,17 @@ describe("run_playbook", () => {
     await tools.runPlaybook({ playbook_uri: "satori://code/x.yml", wait: false });
     expect(posts).toEqual([["/jobs/runs", "satori://code/x.yml"]]);
     expect((await tools.runPlaybook({ playbook_uri: "https://evil/x" })).error).toContain("satori://");
+  });
+
+  it("sends secrets without echoing them", async () => {
+    const post = mockClient("post", () => ({ id: 1, status: "QUEUED" }));
+    mockClient("get", () => ({ items: [] }));
+    const result = await tools.runPlaybook({ playbook_uri: "satori://a.yml", secrets: { TOKEN: "s3cr3t" } });
+    expect((post.mock.calls[0][1] as any).secrets).toEqual({ TOKEN: "s3cr3t" });
+    expect(JSON.stringify(result)).not.toContain("s3cr3t");
+
+    await tools.runPlaybook({ playbook_uri: "satori://a.yml", wait: false });
+    expect((post.mock.calls[1][1] as any).secrets).toEqual({});
   });
 });
 
@@ -345,6 +360,69 @@ describe("scan_repository", () => {
     });
     await tools.scanRepository({ repository: "octo/*", quantity: 7 });
     expect(seen.criteria).toEqual({ quantity: 1 });
+  });
+
+  it("sends secrets", async () => {
+    const seen: any = {};
+    mockClient("post", (_url, body) => {
+      Object.assign(seen, body);
+      return { id: 6, status: "QUEUED" };
+    });
+    await tools.scanRepository({ repository: "o/r", secrets: { TOKEN: "x" } });
+    expect(seen.secrets).toEqual({ TOKEN: "x" });
+  });
+});
+
+describe("saved inputs", () => {
+  it("lists parameters and secret names for a scope", async () => {
+    const get = mockClient("get", (url) =>
+      url === "/settings/parameters"
+        ? [{ name: "HOST", values: ["a.com"] }]
+        : [{ name: "TOKEN", created_at: "2026-10-01T00:00:00Z" }],
+    );
+    const result = await tools.listSavedInputs({ repository: "o/r" });
+    expect(get).toHaveBeenCalledWith("/settings/parameters", { repository: "o/r" });
+    expect(get).toHaveBeenCalledWith("/settings/secrets", { repository: "o/r" });
+    expect(result).toEqual({
+      repository: "o/r",
+      parameters: [{ name: "HOST", values: ["a.com"] }],
+      secrets: [{ name: "TOKEN", created_at: "2026-10-01T00:00:00Z" }],
+    });
+
+    await tools.listSavedInputs();
+    expect(get).toHaveBeenLastCalledWith("/settings/secrets", {});
+  });
+
+  it("saves and deletes parameters", async () => {
+    const put = mockClient("put", (_url, body) => ({ name: "A B", values: body.values }));
+    const result = await tools.saveParameter({ name: "A B", values: ["1"] });
+    expect(put).toHaveBeenCalledWith("/settings/parameters/A%20B", { values: ["1"] }, {});
+    expect(result).toEqual({ name: "A B", values: ["1"], repository: null });
+
+    const del = mockClient("delete", () => undefined);
+    expect(await tools.deleteParameter({ name: "HOST", repository: "o/r" })).toEqual({
+      deleted: "HOST",
+      repository: "o/r",
+    });
+    expect(del).toHaveBeenCalledWith("/settings/parameters/HOST", { repository: "o/r" });
+  });
+
+  it("saves and deletes secrets without echoing the value", async () => {
+    const put = mockClient("put", () => ({ name: "TOKEN", created_at: "t" }));
+    const result = await tools.saveSecret({ name: "TOKEN", value: "s3cr3t", repository: "o/r" });
+    expect(put).toHaveBeenCalledWith("/settings/secrets/TOKEN", { value: "s3cr3t" }, { repository: "o/r" });
+    expect(result).toEqual({ name: "TOKEN", created_at: "t", repository: "o/r" });
+
+    const del = mockClient("delete", () => undefined);
+    await tools.deleteSecret({ name: "TOKEN" });
+    expect(del).toHaveBeenCalledWith("/settings/secrets/TOKEN", {});
+  });
+
+  it("turns API validation errors into error objects", async () => {
+    mockClient("put", () => {
+      throw new HttpStatusError(400, "Invalid name: '1X'", "http://x");
+    });
+    expect((await tools.saveSecret({ name: "1X", value: "v" })).status).toBe(400);
   });
 });
 
