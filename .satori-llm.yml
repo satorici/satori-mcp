@@ -1,0 +1,23 @@
+# satori:recommended v2 node/pnpm
+settings:
+  name: Quality checks (node/pnpm)
+  image: node:22-slim
+install:
+- corepack pnpm install --frozen-lockfile
+types:
+  tsc:
+    assertReturnCode: 0
+    setSeverity: 2
+    run:
+    - corepack pnpm exec tsc --noEmit
+unit:
+  node_tests:
+    assertReturnCode: 0
+    setSeverity: 3
+    run:
+    - corepack pnpm run test
+security:
+  node_audit:
+    setSeverity: 4
+    run:
+    - corepack pnpm audit --json
