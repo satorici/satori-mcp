@@ -15,3 +15,7 @@ export const DOCS_URL = (process.env.SATORI_DOCS_URL ?? "https://docs-v2.satori.
 export function reportUrl(executionId: number): string {
   return `${DASHBOARD_URL}/reports/${executionId}`;
 }
+
+export function advisoryUrl(advisoryId: number): string {
+  return `${DASHBOARD_URL}/advisories/${advisoryId}`;
+}

@@ -18,6 +18,8 @@ export const INSTRUCTIONS =
   "analyze_finding / analyze_execution queue server-side AI analysis with the account's AI key " +
   "(only when asked); get_finding_ai_analysis reads the latest. suggested_status is advisory — " +
   "do not call update_finding_status unless the user asked to triage. " +
+  "create_security_advisory / publish_security_advisory / update_advisory_visibility only when asked " +
+  "(no delete); get_advisory and get_advisory_status are read-only. " +
   "list_playbooks/get_playbook browse ready-made catalog playbooks (use via " +
   "playbook_uri); scan_repository scans one named owner/repo. " +
   "run_local runs a playbook's commands on THIS machine (results are uploaded; " +
@@ -384,9 +386,66 @@ Run one with run_playbook/scan_repository(playbook_uri=...); read details with g
     `List external issues you already created from findings (read-only).
 
 kind: SECURITY_ADVISORY or ISSUE. provider: GITHUB. order: ASC or DESC.
-Returns titles and links (external_url), not the full advisory text.`,
-    { execution_id: optInt(), kind: optStr(), provider: optStr(), order: optStr(), ...paging() },
+Optional finding_id or execution_id filters. Returns titles and links (external_url),
+not the full advisory text; use get_advisory for details.`,
+    {
+      execution_id: optInt(),
+      finding_id: optInt(),
+      kind: optStr(),
+      provider: optStr(),
+      order: optStr(),
+      ...paging(),
+    },
     (args) => tools.listAdvisories(args),
+  );
+
+  tool(
+    "get_advisory",
+    "Details of one external issue / security advisory (description capped), with advisory_url.",
+    { advisory_id: int() },
+    (args) => tools.getAdvisory(args),
+  );
+
+  tool(
+    "create_security_advisory",
+    `Create a local GitHub security-advisory draft from a finding (PRO/ENTERPRISE).
+
+Only when the user asked. Derives title/description from the finding (and completed AI
+analysis if any). Optional visibility (PUBLIC, PRIVATE, UNLISTED; default UNLISTED).
+Does not contact GitHub — call publish_security_advisory when asked to publish.
+Creating a draft can promote a PRIVATE execution to UNLISTED. If one already exists
+for the finding, returns the existing row.`,
+    { finding_id: int(), visibility: optStr() },
+    (args) => tools.createSecurityAdvisory(args),
+  );
+
+  tool(
+    "publish_security_advisory",
+    `Submit an existing security-advisory draft to GitHub (PRO/ENTERPRISE; needs GitHub PAT in Settings).
+
+Only when the user asked to publish. Uses finding_id (not advisory_id). Requires a
+prior create_security_advisory draft. Returns external_url on success.`,
+    { finding_id: int() },
+    (args) => tools.publishSecurityAdvisory(args),
+  );
+
+  tool(
+    "get_advisory_status",
+    `Live remote GitHub status for a published security advisory (e.g. triage).
+
+Needs a GitHub PAT in Settings. advisory_id from get_advisory / list_advisories.
+The state is not stored locally.`,
+    { advisory_id: int() },
+    (args) => tools.getAdvisoryStatus(args),
+  );
+
+  tool(
+    "update_advisory_visibility",
+    `Change an advisory's visibility (PUBLIC, PRIVATE or UNLISTED).
+
+Only when the user asked. Does not change the GitHub remote advisory.`,
+    { advisory_id: int(), visibility: z.string() },
+    (args) => tools.updateAdvisoryVisibility(args),
   );
 
   tool(

@@ -12,7 +12,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { client, playbooksClient } from "./api.js";
 import { makeBundle, uploadBundle } from "./bundle.js";
 import { config } from "./config.js";
-import { DOCS_URL, reportUrl } from "./constants.js";
+import { advisoryUrl, DOCS_URL, reportUrl } from "./constants.js";
 import { ApiTimeoutError, AuthError, HttpStatusError, SatoriError } from "./errors.js";
 import { cloneRepo, requireGit } from "./git.js";
 import { runLocalJob } from "./local/localRun.js";
@@ -70,19 +70,27 @@ function expandUser(path: string): string {
 const isDir = (path: string) => existsSync(path) && statSync(path).isDirectory();
 const isFile = (path: string) => existsSync(path) && statSync(path).isFile();
 
+export const AI_ANALYSIS_409_HINT =
+  "Configure an AI provider and API key in Settings (dashboard) before analyzing findings.";
+
+export const PUBLISH_ADVISORY_409_HINT =
+  "Conflict: advisory may already be published, or no GitHub PAT is configured in Settings.";
+
 export function errorResult(e: unknown): Dict | null {
   if (e instanceof AuthError) return { error: "Not logged in. Run: satori-v2 config token <token>" };
   if (e instanceof HttpStatusError) {
     const result: Dict = { error: shaping.clip(e.text, 2000), status: e.status };
     if (e.status === 403) result.hint = "This action needs a PRO or ENTERPRISE plan.";
-    if (e.status === 409) {
-      result.hint = "Configure an AI provider and API key in Settings (dashboard) before analyzing findings.";
-    }
     return result;
   }
   if (e instanceof ApiTimeoutError) return { error: "Request to the Satori API timed out." };
   if (e instanceof SatoriError) return { error: e.message };
   return null;
+}
+
+function withAi409Hint(result: Dict): Dict {
+  if (result.status === 409) result.hint = AI_ANALYSIS_409_HINT;
+  return result;
 }
 
 /** Turn API/auth failures into small error objects instead of protocol errors. */
@@ -644,7 +652,7 @@ export interface AnalyzeFindingArgs {
   wait_seconds?: number;
 }
 
-export const analyzeFinding = safe(async (args: AnalyzeFindingArgs): Promise<Dict> => {
+const _analyzeFinding = safe(async (args: AnalyzeFindingArgs): Promise<Dict> => {
   const { finding_id: id, force = false, wait = true, wait_seconds: waitSeconds = AI_ANALYSIS_DEFAULT_WAIT } = args;
   let analysis = await postFindingAiAnalysis(id, force);
   if (wait && analysis.status === "PENDING") {
@@ -658,6 +666,9 @@ export const analyzeFinding = safe(async (args: AnalyzeFindingArgs): Promise<Dic
   return result;
 });
 
+export const analyzeFinding = async (args: AnalyzeFindingArgs): Promise<Dict> =>
+  withAi409Hint(await _analyzeFinding(args));
+
 export interface AnalyzeExecutionArgs {
   execution_id: number;
   finding_ids?: number[] | null;
@@ -666,7 +677,7 @@ export interface AnalyzeExecutionArgs {
   wait_seconds?: number;
 }
 
-export const analyzeExecution = safe(async (args: AnalyzeExecutionArgs): Promise<Dict> => {
+const _analyzeExecution = safe(async (args: AnalyzeExecutionArgs): Promise<Dict> => {
   const {
     execution_id: executionId,
     finding_ids: findingIds,
@@ -709,6 +720,9 @@ export const analyzeExecution = safe(async (args: AnalyzeExecutionArgs): Promise
   }
   return result;
 });
+
+export const analyzeExecution = async (args: AnalyzeExecutionArgs): Promise<Dict> =>
+  withAi409Hint(await _analyzeExecution(args));
 
 export interface ListJobsArgs {
   type?: string | null;
@@ -822,8 +836,11 @@ export const getPlaybook = safe(async ({ playbook_uri: uri }: { playbook_uri: st
   return result;
 });
 
+export const PUBLISH_ADVISORY_TIMEOUT_MS = 30_000;
+
 export interface ListAdvisoriesArgs {
   execution_id?: number | null;
+  finding_id?: number | null;
   kind?: string | null;
   provider?: string | null;
   order?: string | null;
@@ -841,11 +858,107 @@ export const listAdvisories = safe(async (args: ListAdvisoriesArgs = {}): Promis
   if (order && !ORDERS.includes(order)) return oneOf("order", ORDERS);
   const quantity = clamp(args.quantity ?? 25, 1, 25);
   const params: Dict = { quantity, page };
-  const optional: Dict = { execution_id: args.execution_id, kind, provider, order };
+  const optional: Dict = {
+    execution_id: args.execution_id,
+    finding_id: args.finding_id,
+    kind,
+    provider,
+    order,
+  };
   for (const [k, v] of Object.entries(optional)) if (v !== null && v !== undefined) params[k] = v;
   const data = await client.get("/external_issues", params);
   return shaping.paged(data.items.map(shaping.summarizeAdvisory), data.total, page, quantity);
 });
+
+function shapeAdvisoryDetail(advisory: Dict): Dict {
+  const id = advisory.id as number | null | undefined;
+  return shaping.detailAdvisory(advisory, id != null ? advisoryUrl(id) : null);
+}
+
+async function findSecurityAdvisoryForFinding(findingId: number): Promise<Dict | null> {
+  const data = await client.get("/external_issues", {
+    finding_id: findingId,
+    kind: "SECURITY_ADVISORY",
+    quantity: 1,
+  });
+  return data.items?.[0] ?? null;
+}
+
+export const getAdvisory = safe(async ({ advisory_id: id }: { advisory_id: number }): Promise<Dict> =>
+  shapeAdvisoryDetail(await client.get(`/external_issues/${id}`)),
+);
+
+export interface CreateSecurityAdvisoryArgs {
+  finding_id: number;
+  visibility?: string | null;
+}
+
+export const createSecurityAdvisory = safe(async (args: CreateSecurityAdvisoryArgs): Promise<Dict> => {
+  const { finding_id: findingId } = args;
+  const visibility = args.visibility ? args.visibility.toUpperCase() : null;
+  if (visibility && !VISIBILITIES.includes(visibility)) return oneOf("visibility", VISIBILITIES);
+
+  const body: Dict = { finding_id: findingId };
+  if (visibility) body.visibility = visibility;
+
+  let advisory: Dict;
+  let existed = false;
+  try {
+    advisory = await client.post("/external_issues/security_advisory", body);
+  } catch (e) {
+    if (!(e instanceof HttpStatusError) || e.status !== 409) throw e;
+    const existing = await findSecurityAdvisoryForFinding(findingId);
+    if (!existing) {
+      return { error: shaping.clip(e.text, 2000), status: 409 };
+    }
+    advisory = existing;
+    existed = true;
+  }
+
+  const result = shapeAdvisoryDetail(advisory);
+  if (existed) {
+    result.hint = "A security advisory already exists for this finding; returning the existing one.";
+  } else if (!advisory.external_id) {
+    result.hint =
+      "Draft created (not on GitHub yet). Call publish_security_advisory(finding_id) only when the user asks to publish.";
+  }
+  return result;
+});
+
+export const publishSecurityAdvisory = safe(async ({ finding_id: findingId }: { finding_id: number }): Promise<Dict> => {
+  try {
+    const response = await client.request("POST", "/external_issues/security_advisory/publish", {
+      json: { finding_id: findingId },
+      timeoutMs: PUBLISH_ADVISORY_TIMEOUT_MS,
+    });
+    const advisory = (await response.json()) as Dict;
+    const result = shapeAdvisoryDetail(advisory);
+    if (advisory.external_url) {
+      result.hint = "Published to GitHub. external_url is the remote advisory link.";
+    }
+    return result;
+  } catch (e) {
+    const result = errorResult(e);
+    if (result === null) throw e;
+    if (result.status === 409) result.hint = PUBLISH_ADVISORY_409_HINT;
+    return result;
+  }
+});
+
+export const getAdvisoryStatus = safe(async ({ advisory_id: id }: { advisory_id: number }): Promise<Dict> => {
+  const data = await client.get(`/external_issues/${id}/status`);
+  return { advisory_id: id, status: data.status ?? null };
+});
+
+export const updateAdvisoryVisibility = safe(
+  async ({ advisory_id: id, visibility }: { advisory_id: number; visibility: string }): Promise<Dict> => {
+    visibility = visibility.toUpperCase();
+    if (!VISIBILITIES.includes(visibility)) return oneOf("visibility", VISIBILITIES);
+    // API returns 200 with an empty body.
+    await client.request("PATCH", `/external_issues/${id}`, { json: { visibility } });
+    return { id, visibility };
+  },
+);
 
 export const listRepos = safe(async (args: { order?: string | null; quantity?: number; page?: number } = {}) => {
   const { page = 1 } = args;

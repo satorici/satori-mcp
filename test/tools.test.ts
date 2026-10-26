@@ -103,13 +103,13 @@ it("turns HTTP errors into error objects", async () => {
   expect(result.hint).toContain("PRO");
 });
 
-it("hints Settings when AI analysis returns 409", async () => {
+it("hints AI Settings when AI analysis returns 409", async () => {
   mockClient("request", () => {
     throw new HttpStatusError(409, "No provider selected", "http://x");
   });
   const result = await tools.analyzeFinding({ finding_id: 1, wait: false });
   expect(result.status).toBe(409);
-  expect(result.hint).toContain("Settings");
+  expect(result.hint).toBe(tools.AI_ANALYSIS_409_HINT);
 });
 
 describe("get_execution_output", () => {
@@ -617,10 +617,143 @@ it("list_advisories validates and omits long text", async () => {
     Object.assign(seen, { url, ...params });
     return { total: 1, items: [{ id: 1, kind: "ISSUE", title: "t", description: "d".repeat(9999) }] };
   });
-  const result = await tools.listAdvisories({ kind: "issue", execution_id: 5, quantity: 99 });
-  expect(seen).toMatchObject({ url: "/external_issues", kind: "ISSUE", quantity: 25, execution_id: 5 });
+  const result = await tools.listAdvisories({
+    kind: "issue",
+    execution_id: 5,
+    finding_id: 9,
+    quantity: 99,
+  });
+  expect(seen).toMatchObject({
+    url: "/external_issues",
+    kind: "ISSUE",
+    quantity: 25,
+    execution_id: 5,
+    finding_id: 9,
+  });
   expect(result.items[0]).not.toHaveProperty("description");
   expect((await tools.listAdvisories({ kind: "PR" })).error).toContain("kind must be");
+});
+
+describe("security advisories", () => {
+  const draft = {
+    id: 42,
+    kind: "SECURITY_ADVISORY",
+    provider: "GITHUB",
+    title: "CVE-ish",
+    description: "d".repeat(100),
+    severity: 2,
+    finding_id: 7,
+    execution_id: 3,
+    external_id: null,
+    external_url: null,
+    visibility: "UNLISTED",
+    vulnerabilities: [{ package_name: "x", vulnerable_version_range: "LATEST" }],
+  };
+
+  it("get_advisory returns clipped detail and advisory_url", async () => {
+    mockClient("get", (url) => {
+      expect(url).toBe("/external_issues/42");
+      return { ...draft, description: "z".repeat(10_000) };
+    });
+    const result = await tools.getAdvisory({ advisory_id: 42 });
+    expect(result.advisory_url).toContain("/advisories/42");
+    expect(result.description.length).toBeLessThan(shaping.MAX_ADVISORY_DESCRIPTION_CHARS + 100);
+    expect(result.vulnerabilities).toBeDefined();
+  });
+
+  it("create_security_advisory posts a draft", async () => {
+    const post = mockClient("post", (url, body) => {
+      expect(url).toBe("/external_issues/security_advisory");
+      expect(body).toEqual({ finding_id: 7, visibility: "PRIVATE" });
+      return draft;
+    });
+    const result = await tools.createSecurityAdvisory({ finding_id: 7, visibility: "private" });
+    expect(post).toHaveBeenCalled();
+    expect(result).toMatchObject({ id: 42, finding_id: 7 });
+    expect(result.hint).toContain("publish_security_advisory");
+  });
+
+  it("create_security_advisory returns existing on 409", async () => {
+    mockClient("post", () => {
+      throw new HttpStatusError(409, "already exists", "http://x");
+    });
+    mockClient("get", (url, params) => {
+      expect(url).toBe("/external_issues");
+      expect(params).toMatchObject({ finding_id: 7, kind: "SECURITY_ADVISORY" });
+      return { total: 1, items: [{ ...draft, external_id: "GHSA-x" }] };
+    });
+    const result = await tools.createSecurityAdvisory({ finding_id: 7 });
+    expect(result.id).toBe(42);
+    expect(result.hint).toContain("already exists");
+    expect(result).not.toHaveProperty("status");
+  });
+
+  it("create_security_advisory 409 without existing row returns error without AI hint", async () => {
+    mockClient("post", () => {
+      throw new HttpStatusError(409, "already exists", "http://x");
+    });
+    mockClient("get", () => ({ total: 0, items: [] }));
+    const result = await tools.createSecurityAdvisory({ finding_id: 7 });
+    expect(result).toMatchObject({ status: 409, error: expect.stringContaining("already exists") });
+    expect(result.hint).toBeUndefined();
+  });
+
+  it("publish_security_advisory posts finding_id and returns external_url", async () => {
+    const request = mockClient("request", (method, path, options) => {
+      expect(method).toBe("POST");
+      expect(path).toBe("/external_issues/security_advisory/publish");
+      expect(options?.json).toEqual({ finding_id: 7 });
+      expect(options?.timeoutMs).toBe(tools.PUBLISH_ADVISORY_TIMEOUT_MS);
+      return {
+        json: async () => ({
+          ...draft,
+          external_id: "GHSA-1",
+          external_url: "https://github.com/advisories/GHSA-1",
+        }),
+      };
+    });
+    const result = await tools.publishSecurityAdvisory({ finding_id: 7 });
+    expect(request).toHaveBeenCalled();
+    expect(result.external_url).toContain("GHSA-1");
+    expect(result.hint).toContain("Published");
+  });
+
+  it("publish_security_advisory 409 gets publish hint not AI hint", async () => {
+    mockClient("request", () => {
+      throw new HttpStatusError(409, "already published", "http://x");
+    });
+    const result = await tools.publishSecurityAdvisory({ finding_id: 7 });
+    expect(result.status).toBe(409);
+    expect(result.hint).toBe(tools.PUBLISH_ADVISORY_409_HINT);
+  });
+
+  it("get_advisory_status returns remote status", async () => {
+    mockClient("get", (url) => {
+      expect(url).toBe("/external_issues/42/status");
+      return { status: "triage" };
+    });
+    expect(await tools.getAdvisoryStatus({ advisory_id: 42 })).toEqual({
+      advisory_id: 42,
+      status: "triage",
+    });
+  });
+
+  it("update_advisory_visibility validates and patches", async () => {
+    expect((await tools.updateAdvisoryVisibility({ advisory_id: 1, visibility: "secret" })).error).toContain(
+      "visibility must be",
+    );
+    const request = mockClient("request", (method, path, options) => {
+      expect(method).toBe("PATCH");
+      expect(path).toBe("/external_issues/42");
+      expect(options?.json).toEqual({ visibility: "PUBLIC" });
+      return { ok: true };
+    });
+    expect(await tools.updateAdvisoryVisibility({ advisory_id: 42, visibility: "public" })).toEqual({
+      id: 42,
+      visibility: "PUBLIC",
+    });
+    expect(request).toHaveBeenCalled();
+  });
 });
 
 it("list_monitors and list_scans filter by job type", async () => {

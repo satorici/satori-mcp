@@ -17,6 +17,7 @@ export const MAX_PLAYBOOK_CHARS = 20_000;
 export const MAX_TIMELINE_ITEMS = 20;
 export const MAX_COMMENT_CHARS = 2_000;
 export const MAX_AI_FIX_STEPS = 10;
+export const MAX_ADVISORY_DESCRIPTION_CHARS = 4_000;
 export const OUTPUT_STREAMS = ["stdout", "stderr", "os_error"] as const;
 
 export function clip(value: unknown, limit: number = MAX_FIELD_CHARS): any {
@@ -305,4 +306,15 @@ export function summarizeAdvisory(advisory: Dict): Dict {
     execution_id: advisory.execution_id ?? null,
     created_at: advisory.created_at ?? null,
   };
+}
+
+/** Full advisory: clipped description and vulnerabilities. */
+export function detailAdvisory(advisory: Dict, advisoryUrl: string | null = null): Dict {
+  const result = summarizeAdvisory(advisory);
+  result.description = clip(advisory.description ?? null, MAX_ADVISORY_DESCRIPTION_CHARS);
+  if (advisory.vulnerabilities !== undefined && advisory.vulnerabilities !== null) {
+    result.vulnerabilities = clipDeep(advisory.vulnerabilities, MAX_FIELD_CHARS);
+  }
+  if (advisoryUrl) result.advisory_url = advisoryUrl;
+  return result;
 }

@@ -90,6 +90,22 @@ it("clip reports how much was cut", () => {
   expect(shaping.clip(5)).toBe(5);
 });
 
+it("detailAdvisory clips description and keeps list fields", () => {
+  const result = shaping.detailAdvisory(
+    {
+      id: 1,
+      title: "t",
+      description: "d".repeat(10_000),
+      vulnerabilities: [{ package_name: "p", note: "n".repeat(2000) }],
+    },
+    "http://dash/advisories/1",
+  );
+  expect(result.description.length).toBeLessThan(shaping.MAX_ADVISORY_DESCRIPTION_CHARS + 100);
+  expect(result.vulnerabilities[0].note.length).toBeLessThan(600);
+  expect(result.advisory_url).toBe("http://dash/advisories/1");
+  expect(shaping.summarizeAdvisory({ id: 1, description: "long" })).not.toHaveProperty("description");
+});
+
 it("summarizeAiAnalysis clips text, caps fix_steps, and keeps useful data", () => {
   const result = shaping.summarizeAiAnalysis({
     id: 1,
