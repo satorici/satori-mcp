@@ -5,7 +5,7 @@
 # Bump `rules_version` whenever tools are added; give each new tool `since: <that version>`
 # so repos already on an older recommendation are only asked about what is new.
 
-rules_version: 2
+rules_version: 3
 
 # User-facing preferences. `choice` prefs pick one tool among several; `bool` prefs turn an
 # optional tool on or off. A pref is only asked when the repo does not already settle it.
@@ -132,6 +132,15 @@ profiles:
     foundry:
       image: ghcr.io/foundry-rs/foundry:stable
       install: []
+      run: ""
+  dart:
+    dart:
+      image: dart:stable
+      install: ["dart pub get"]
+      run: ""
+    flutter:
+      image: ghcr.io/cirruslabs/flutter:stable
+      install: ["flutter pub get"]
       run: ""
 
 # Tool entries.
@@ -664,6 +673,59 @@ tools:
     severity: 3
     since: 2
     why: "Compiles the contracts and runs the Foundry tests."
+
+  # ------------------------------------------------------------------- dart
+  - id: dart_analyze
+    language: dart
+    category: lint
+    kind: project
+    command:
+      flutter: "flutter analyze"
+      dart: "dart analyze"
+    configured_by:
+      - "file:analysis_options.yaml"
+      - "dep:flutter_lints"
+      - "dep:lints"
+      - "dep:very_good_analysis"
+    blocking_if_present: true
+    severity: 2
+    since: 3
+    why: "Static analysis and type checks from the Dart analyzer."
+
+  - id: dart_format
+    language: dart
+    category: format
+    kind: project
+    command: "dart format --output=none --set-exit-if-changed ."
+    configured_by: []
+    blocking_if_present: true
+    severity: 1
+    since: 3
+    why: "Fails if any file is not dart-format formatted."
+
+  - id: dart_test
+    language: dart
+    category: unit
+    kind: project
+    command:
+      flutter: "flutter test"
+      dart: "dart test"
+    configured_by: []
+    blocking_if_present: true
+    severity: 3
+    since: 3
+    why: "Runs the package or Flutter test suite."
+
+  - id: dart_pub_audit
+    language: dart
+    category: security
+    kind: project
+    command: "dart pub audit --json"
+    configured_by: []
+    blocking_if_present: false
+    severity: 4
+    since: 3
+    why: "Known-vulnerable pub packages; JSON output feeds findings."
 
   # ------------------------------------------------------------ dockerfile
   # Cross-cutting: applies to any repo with a Dockerfile, but only where a Python

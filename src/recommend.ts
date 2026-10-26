@@ -18,7 +18,20 @@ export const LLM_PLAYBOOK = ".satori-llm.yml";
 export const CI_PLAYBOOK = ".satori.yml";
 export const LLM_IMPORT = "file://.satori-llm.yml";
 const PREDICATES = ["has_file", "has_dir", "has_dep", "pkg_script", "manager", "has_any"];
-const LANGUAGES = ["python", "node", "go", "java", "csharp", "rust", "ruby", "php", "swift", "cpp", "solidity"];
+const LANGUAGES = [
+  "python",
+  "node",
+  "go",
+  "java",
+  "csharp",
+  "rust",
+  "ruby",
+  "php",
+  "swift",
+  "cpp",
+  "solidity",
+  "dart",
+];
 const MANAGERS: Record<string, string> = {
   go: "go",
   csharp: "dotnet",
@@ -110,6 +123,17 @@ export class Profile {
     }
     if (this.language === "php") {
       return ["require", "require-dev"].some((k) => name in (this.composerJson[k] ?? {}));
+    }
+    if (this.language === "dart") {
+      let pubspec: Dict = {};
+      try {
+        pubspec = (parse(this.manifest) as Dict) || {};
+      } catch {
+        return false;
+      }
+      return ["dependencies", "dev_dependencies", "dependency_overrides"].some(
+        (k) => name in (pubspec[k] ?? {}),
+      );
     }
     return false;
   }
@@ -252,13 +276,14 @@ export function detect(root: string): Profile {
     ["composer.json", "php"],
     ["Package.swift", "swift"],
     ["CMakeLists.txt", "cpp"],
+    ["pubspec.yaml", "dart"],
   ]) {
     if (has(manifest)) found.push(lang);
   }
   if (!found.length) {
     throw new SatoriError(
       "No supported project detected (looked for Python, JS/TS, Go, Java, C#, " +
-        `Rust, Ruby, PHP, Swift, C/C++ and Solidity manifests) in ${root}.`,
+        `Rust, Ruby, PHP, Swift, C/C++, Solidity and Dart/Flutter manifests) in ${root}.`,
     );
   }
 
@@ -270,6 +295,7 @@ export function detect(root: string): Profile {
   else if (language === "php") profile.composerJson = parseJsonFile(join(root, "composer.json"), "composer.json");
   else if (language === "ruby") profile.manifest = `${read(join(root, "Gemfile"))}\n${read(join(root, "Gemfile.lock"))}`;
   else if (language === "rust") profile.manifest = read(join(root, "Cargo.toml"));
+  else if (language === "dart") profile.manifest = read(join(root, "pubspec.yaml"));
 
   if (language === "python") {
     const uv = has("uv.lock") || profile.hasPyprojectSection("tool.uv");
@@ -287,6 +313,12 @@ export function detect(root: string): Profile {
     profile.hasLockfile = glob(root, locks[profile.manager]).length > 0;
   } else if (language === "java") {
     profile.manager = has("pom.xml") ? "maven" : "gradle";
+  } else if (language === "dart") {
+    // Flutter apps declare `sdk: flutter` and/or a top-level `flutter:` section.
+    const flutter =
+      /^\s*flutter\s*:/m.test(profile.manifest) ||
+      /sdk\s*:\s*flutter\b/.test(profile.manifest);
+    profile.manager = flutter ? "flutter" : "dart";
   } else {
     profile.manager = MANAGERS[language];
   }

@@ -105,7 +105,8 @@ export function createServer(): McpServer {
     `Recommend a quality-check playbook (lint, format, types, unit, security) for a repo.
 
 Detects the stack in \`directory\` (default: the server's current directory) for Python,
-JS/TS, Go, Java, C#, Rust, Ruby, PHP, Swift, C/C++ (CMake) or Solidity (Foundry), and
+JS/TS, Go, Java, C#, Rust, Ruby, PHP, Swift, C/C++ (CMake), Solidity (Foundry) or
+Dart/Flutter, and
 returns content for \`.satori-llm.yml\` plus a \`checks\` list explaining why each check
 is there. \`.satori.yml\` is reserved for CI/manual runs and should
 \`import: [file://.satori-llm.yml]\`.

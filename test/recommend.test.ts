@@ -43,6 +43,17 @@ const REPOS: Record<string, Record<string, string>> = {
   swift: { "Package.swift": "// swift-tools-version:6.0\n" },
   cpp: { "CMakeLists.txt": "project(x)\n", ".clang-format": "" },
   solidity: { "foundry.toml": "[profile.default]\n", "package.json": "{}" },
+  dart_pkg: {
+    "pubspec.yaml": 'name: example\nenvironment:\n  sdk: "^3.0.0"\n',
+  },
+  flutter_app: {
+    "pubspec.yaml":
+      'name: example\nenvironment:\n  sdk: "^3.0.0"\n' +
+      "dependencies:\n  flutter:\n    sdk: flutter\n" +
+      "dev_dependencies:\n  flutter_lints: ^6.0.0\n" +
+      "flutter:\n  uses-material-design: true\n",
+    "analysis_options.yaml": "include: package:flutter_lints/flutter.yaml\n",
+  },
   py_updated: {
     "pyproject.toml": '[project]\nname = "d"\n\n[tool.black]\nline-length = 100\n',
     "uv.lock": "",
@@ -80,6 +91,8 @@ const EXPECTED_IDS: Record<string, string[]> = {
   swift: ["swift_format", "swift_test"],
   cpp: ["cppcheck", "clang_format", "ctest"],
   solidity: ["forge_fmt", "forge_test"],
+  dart_pkg: ["dart_analyze", "dart_format", "dart_test", "dart_pub_audit"],
+  flutter_app: ["dart_analyze", "dart_format", "dart_test", "dart_pub_audit"],
   py_docker: ["ruff_check", "ruff_format", "pyrefly", "pyspector", "checkov_dockerfile"],
 };
 
@@ -155,7 +168,7 @@ it("explicit prefs are applied and persisted in the header", () => {
   expect(ids(r)).toContain("black_check");
   expect(ids(r)).toContain("vulture");
   expect(ids(r)).not.toContain("ruff_format");
-  expect(r.header).toBe("# satori:recommended v2 python/uv prefs: formatter=black dead_code=true");
+  expect(r.header).toBe("# satori:recommended v3 python/uv prefs: formatter=black dead_code=true");
   expect(new Set(r.questions.map((q) => q.pref))).toEqual(new Set(["types", "security"]));
 });
 
@@ -237,6 +250,23 @@ it("foundry wins over package.json", () => {
   expect(profile.otherLanguages).toEqual(["node"]);
 });
 
+it("detects pure Dart vs Flutter managers", () => {
+  expect(recommend.detect(join(FIXTURES, "dart_pkg")).manager).toBe("dart");
+  const flutter = recommend.detect(join(FIXTURES, "flutter_app"));
+  expect([flutter.language, flutter.manager]).toEqual(["dart", "flutter"]);
+  expect(flutter.hasDep("flutter_lints")).toBe(true);
+  const r = rec("flutter_app");
+  expect(r.checks.filter((c) => c.blocking).map((c) => c.id)).toContain("dart_analyze");
+  expect(Object.fromEntries(r.checks.map((c) => [c.id, c.command]))).toMatchObject({
+    dart_analyze: "flutter analyze",
+    dart_test: "flutter test",
+  });
+  expect(Object.fromEntries(rec("dart_pkg").checks.map((c) => [c.id, c.command]))).toMatchObject({
+    dart_analyze: "dart analyze",
+    dart_test: "dart test",
+  });
+});
+
 describe("recommend_playbook tool", () => {
   it("returns a new playbook, or changes for an existing one", async () => {
     const result = await recommendPlaybook({ directory: join(FIXTURES, "py_uv") });
@@ -252,7 +282,7 @@ describe("recommend_playbook tool", () => {
     const existing = await recommendPlaybook({ directory: join(FIXTURES, "py_updated") });
     expect(existing.existing).toBe(true);
     expect(existing).not.toHaveProperty("playbook_yaml");
-    expect(existing.header.startsWith("# satori:recommended v2")).toBe(true);
+    expect(existing.header.startsWith("# satori:recommended v3")).toBe(true);
     expect(existing).not.toHaveProperty("needs_ci_import");
     expect(existing).not.toHaveProperty("migrate_from_ci");
     expect(existing.hint).toContain(recommend.LLM_PLAYBOOK);
