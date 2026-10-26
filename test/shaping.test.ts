@@ -89,3 +89,26 @@ it("clip reports how much was cut", () => {
   expect(shaping.clip("abcdef", 2)).toBe("ab... [4 chars truncated]");
   expect(shaping.clip(5)).toBe(5);
 });
+
+it("summarizeAiAnalysis clips text, caps fix_steps, and keeps useful data", () => {
+  const result = shaping.summarizeAiAnalysis({
+    id: 1,
+    finding_id: 9,
+    model: "m",
+    status: "COMPLETED",
+    risk: "HIGH",
+    false_positive_likelihood: 0.2,
+    suggested_status: "TP",
+    summary: "s".repeat(2000),
+    root_cause: "r".repeat(2000),
+    fix_steps: Array.from({ length: 15 }, (_, i) => `step ${i} ${"x".repeat(600)}`),
+    data: { provider: "openai", usage: { tokens: 1 }, cost: 0.01, error: undefined, noise: "drop" },
+  });
+  expect(result.summary.length).toBeLessThan(600);
+  expect(result.root_cause.length).toBeLessThan(600);
+  expect(result.fix_steps).toHaveLength(shaping.MAX_AI_FIX_STEPS);
+  expect(result.fix_steps_truncated).toBe(true);
+  expect(result.fix_steps[0].length).toBeLessThan(600);
+  expect(result.data).toEqual({ provider: "openai", usage: { tokens: 1 }, cost: 0.01 });
+  expect(result.hint).toContain("advisory");
+});

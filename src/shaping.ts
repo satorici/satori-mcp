@@ -16,6 +16,7 @@ export const MAX_SNAPSHOT_CHARS = 4_000;
 export const MAX_PLAYBOOK_CHARS = 20_000;
 export const MAX_TIMELINE_ITEMS = 20;
 export const MAX_COMMENT_CHARS = 2_000;
+export const MAX_AI_FIX_STEPS = 10;
 export const OUTPUT_STREAMS = ["stdout", "stderr", "os_error"] as const;
 
 export function clip(value: unknown, limit: number = MAX_FIELD_CHARS): any {
@@ -163,6 +164,40 @@ export function detailFinding(finding: Dict): Dict {
   if (snapshot !== undefined && snapshot !== null) {
     const text = typeof snapshot === "string" ? snapshot : pyRepr(snapshot);
     result.snapshot = clip(text, MAX_SNAPSHOT_CHARS);
+  }
+  return result;
+}
+
+/** AI analysis row: clipped text, capped fix steps, only useful `data` fields. */
+export function summarizeAiAnalysis(analysis: Dict): Dict {
+  const rawData = isDict(analysis.data) ? analysis.data : {};
+  const data: Dict = {};
+  if (rawData.provider !== undefined) data.provider = rawData.provider;
+  if (rawData.usage !== undefined) data.usage = rawData.usage;
+  if (rawData.cost !== undefined) data.cost = rawData.cost;
+  if (rawData.error !== undefined) data.error = clip(rawData.error, 500);
+
+  const steps = Array.isArray(analysis.fix_steps) ? analysis.fix_steps : [];
+  const result: Dict = {
+    id: analysis.id ?? null,
+    finding_id: analysis.finding_id ?? null,
+    model: analysis.model ?? null,
+    status: analysis.status ?? null,
+    risk: analysis.risk ?? null,
+    false_positive_likelihood: analysis.false_positive_likelihood ?? null,
+    suggested_status: analysis.suggested_status ?? null,
+    summary: clip(analysis.summary ?? null),
+    root_cause: clip(analysis.root_cause ?? null),
+    fix_steps: steps.slice(0, MAX_AI_FIX_STEPS).map((s) => clip(s)),
+    data,
+  };
+  if (steps.length > MAX_AI_FIX_STEPS) result.fix_steps_truncated = true;
+
+  if (analysis.status === "COMPLETED" && analysis.suggested_status) {
+    result.hint =
+      "`suggested_status` is advisory only. Call update_finding_status only when the user asked to triage.";
+  } else if (analysis.status === "PENDING") {
+    result.hint = "Still pending. Call get_finding_ai_analysis(finding_id) later.";
   }
   return result;
 }

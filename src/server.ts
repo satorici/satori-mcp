@@ -15,6 +15,9 @@ export const INSTRUCTIONS =
   "update_finding_status to triage a finding (only when asked). " +
   "Use add_finding_comment to comment without changing status, and " +
   "get_finding_timeline for status/comment history. " +
+  "analyze_finding / analyze_execution queue server-side AI analysis with the account's AI key " +
+  "(only when asked); get_finding_ai_analysis reads the latest. suggested_status is advisory — " +
+  "do not call update_finding_status unless the user asked to triage. " +
   "list_playbooks/get_playbook browse ready-made catalog playbooks (use via " +
   "playbook_uri); scan_repository scans one named owner/repo. " +
   "run_local runs a playbook's commands on THIS machine (results are uploaded; " +
@@ -264,6 +267,49 @@ Use only when the user asked to comment. To triage and comment together, use
 update_finding_status with comment=... instead.`,
     { finding_id: int(), body: z.string() },
     (args) => tools.addFindingComment(args),
+  );
+
+  tool(
+    "get_finding_ai_analysis",
+    `Latest AI analysis for a finding (PENDING, COMPLETED or FAILED).
+
+Uses the account's configured AI provider. 404 if none exists yet — call
+analyze_finding when the user asks to analyze. suggested_status is advisory only.`,
+    { finding_id: int() },
+    (args) => tools.getFindingAiAnalysis(args),
+  );
+
+  tool(
+    "analyze_finding",
+    `Queue AI analysis for one finding (uses the account's AI API key; costs apply).
+
+Only when the user asked to analyze. force=true queues again even if one is pending
+or completed. With wait (default true), polls until COMPLETED/FAILED or wait_seconds
+(max 600). suggested_status is advisory — do not update_finding_status unless asked.`,
+    {
+      finding_id: int(),
+      force: z.boolean().default(false),
+      wait: z.boolean().default(true),
+      wait_seconds: int().default(tools.AI_ANALYSIS_DEFAULT_WAIT),
+    },
+    (args) => tools.analyzeFinding(args),
+  );
+
+  tool(
+    "analyze_execution",
+    `Queue AI analysis for an execution's findings in one provider call (account AI key; costs apply).
+
+Only when the user asked to analyze. Optional finding_ids (max 20); otherwise the API
+picks up to 20 by severity. force, wait and wait_seconds work as in analyze_finding.
+Returns items, skipped and omitted. suggested_status is advisory only.`,
+    {
+      execution_id: int(),
+      finding_ids: z.array(int()).nullish(),
+      force: z.boolean().default(false),
+      wait: z.boolean().default(true),
+      wait_seconds: int().default(tools.AI_ANALYSIS_DEFAULT_WAIT),
+    },
+    (args) => tools.analyzeExecution(args),
   );
 
   tool(

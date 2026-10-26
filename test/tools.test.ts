@@ -103,6 +103,15 @@ it("turns HTTP errors into error objects", async () => {
   expect(result.hint).toContain("PRO");
 });
 
+it("hints Settings when AI analysis returns 409", async () => {
+  mockClient("request", () => {
+    throw new HttpStatusError(409, "No provider selected", "http://x");
+  });
+  const result = await tools.analyzeFinding({ finding_id: 1, wait: false });
+  expect(result.status).toBe(409);
+  expect(result.hint).toContain("Settings");
+});
+
 describe("get_execution_output", () => {
   it("returns only an index without test", async () => {
     vi.spyOn(tools.deps, "loadExecutionOutputs").mockResolvedValue([{ path: "cmd.0", output: { stdout: "a\nb" } }]);
@@ -256,6 +265,126 @@ it("get_finding includes a capped timeline", async () => {
   expect(result.timeline).toHaveLength(20);
   expect(result.timeline_truncated).toBe(true);
   expect(await tools.getFinding({ finding_id: 1, include_timeline: false })).not.toHaveProperty("timeline");
+});
+
+describe("AI analysis", () => {
+  const pending = {
+    id: 10,
+    finding_id: 3,
+    model: "m",
+    status: "PENDING",
+    summary: null,
+    risk: null,
+    false_positive_likelihood: null,
+    suggested_status: null,
+    root_cause: null,
+    fix_steps: [],
+    data: { provider: "openai" },
+  };
+  const completed = {
+    ...pending,
+    status: "COMPLETED",
+    summary: "looks real",
+    risk: "HIGH",
+    suggested_status: "TP",
+    fix_steps: ["patch it"],
+    data: { provider: "openai", usage: { tokens: 9 }, cost: 0.01 },
+  };
+
+  it("get_finding_ai_analysis shapes the latest row", async () => {
+    mockClient("get", (url) => {
+      expect(url).toBe("/findings/3/ai-analysis");
+      return completed;
+    });
+    const result = await tools.getFindingAiAnalysis({ finding_id: 3 });
+    expect(result).toMatchObject({ id: 10, status: "COMPLETED", suggested_status: "TP" });
+    expect(result.hint).toContain("advisory");
+  });
+
+  it("get_finding_ai_analysis hints analyze_finding on 404", async () => {
+    mockClient("get", () => {
+      throw new HttpStatusError(404, "no analysis", "http://x");
+    });
+    const result = await tools.getFindingAiAnalysis({ finding_id: 3 });
+    expect(result).toMatchObject({ status: 404, hint: expect.stringContaining("analyze_finding") });
+  });
+
+  it("analyze_finding posts, polls until COMPLETED when wait is true", async () => {
+    let gets = 0;
+    const request = mockClient("request", (method, path, options) => {
+      expect(method).toBe("POST");
+      expect(path).toBe("/findings/3/ai-analysis");
+      expect(options?.params).toEqual({ force: true });
+      return { json: async () => pending };
+    });
+    mockClient("get", () => {
+      gets += 1;
+      return gets === 1 ? pending : completed;
+    });
+    vi.spyOn(tools.deps, "now")
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValue(10_000);
+
+    const result = await tools.analyzeFinding({ finding_id: 3, force: true, wait: true });
+    expect(request).toHaveBeenCalled();
+    expect(gets).toBeGreaterThanOrEqual(1);
+    expect(result).toMatchObject({ status: "COMPLETED", suggested_status: "TP" });
+    expect(tools.deps.sleep).toHaveBeenCalled();
+  });
+
+  it("analyze_finding returns PENDING with hint when wait times out", async () => {
+    mockClient("request", () => ({ json: async () => pending }));
+    mockClient("get", () => pending);
+    vi.spyOn(tools.deps, "now").mockReturnValue(0);
+
+    const result = await tools.analyzeFinding({ finding_id: 3, wait: true, wait_seconds: 0 });
+    expect(result.status).toBe("PENDING");
+    expect(result.hint).toContain("Still PENDING");
+  });
+
+  it("analyze_execution posts body, validates finding_ids, returns skipped/omitted", async () => {
+    expect((await tools.analyzeExecution({ execution_id: 1, finding_ids: [] })).error).toContain("non-empty");
+    expect(
+      (await tools.analyzeExecution({ execution_id: 1, finding_ids: Array.from({ length: 21 }, (_, i) => i) })).error,
+    ).toContain("At most 20");
+
+    const post = mockClient("post", (url, body) => {
+      expect(url).toBe("/findings/ai-analysis");
+      expect(body).toEqual({ execution_id: 5, force: false, finding_ids: [1, 2] });
+      return { items: [completed], skipped: [9], omitted: [8] };
+    });
+    const result = await tools.analyzeExecution({
+      execution_id: 5,
+      finding_ids: [1, 2],
+      wait: false,
+    });
+    expect(post).toHaveBeenCalled();
+    expect(result.skipped).toEqual([9]);
+    expect(result.omitted).toEqual([8]);
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0].status).toBe("COMPLETED");
+    expect(result.hint).toContain("advisory");
+  });
+
+  it("analyze_execution waits until queued items complete", async () => {
+    mockClient("post", () => ({ items: [pending], skipped: [], omitted: [] }));
+    let gets = 0;
+    mockClient("get", (url, params) => {
+      expect(url).toBe("/findings/ai-analyses");
+      expect(params).toMatchObject({ execution_id: 5 });
+      gets += 1;
+      return { total: 1, items: [gets === 1 ? pending : { ...completed, id: 10 }] };
+    });
+    vi.spyOn(tools.deps, "now")
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValue(10_000);
+
+    const result = await tools.analyzeExecution({ execution_id: 5, wait: true });
+    expect(result.items[0].status).toBe("COMPLETED");
+    expect(tools.deps.sleep).toHaveBeenCalled();
+  });
 });
 
 it("get_finding_timeline shapes history", async () => {

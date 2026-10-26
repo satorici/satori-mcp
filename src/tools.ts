@@ -47,6 +47,10 @@ export const ADVISORY_PROVIDERS = ["GITHUB"];
 export const MAX_SCAN_QUANTITY = 10;
 export const LOCAL_DEFAULT_TIMEOUT = 300;
 export const LOCAL_MAX_TIMEOUT = 3600;
+export const MAX_AI_ANALYSIS_FINDING_IDS = 20;
+export const AI_ANALYSIS_DEFAULT_WAIT = 120;
+export const AI_ANALYSIS_MAX_WAIT = 600;
+export const AI_ANALYSIS_POLL_MS = 2000;
 
 /** Indirection so tests can skip real waits and fake the local runner. */
 export const deps = {
@@ -71,6 +75,9 @@ export function errorResult(e: unknown): Dict | null {
   if (e instanceof HttpStatusError) {
     const result: Dict = { error: shaping.clip(e.text, 2000), status: e.status };
     if (e.status === 403) result.hint = "This action needs a PRO or ENTERPRISE plan.";
+    if (e.status === 409) {
+      result.hint = "Configure an AI provider and API key in Settings (dashboard) before analyzing findings.";
+    }
     return result;
   }
   if (e instanceof ApiTimeoutError) return { error: "Request to the Satori API timed out." };
@@ -556,6 +563,151 @@ export const addFindingComment = safe(async ({ finding_id: id, body }: { finding
   }
   const comment = await client.post(`/findings/${id}/comments`, { body });
   return { finding_id: id, comment_id: comment.id };
+});
+
+function shapeAiAnalysis(analysis: Dict): Dict {
+  return shaping.summarizeAiAnalysis(analysis);
+}
+
+async function postFindingAiAnalysis(findingId: number, force: boolean): Promise<Dict> {
+  const response = await client.request("POST", `/findings/${findingId}/ai-analysis`, {
+    params: force ? { force: true } : undefined,
+  });
+  return response.json() as Promise<Dict>;
+}
+
+async function waitForFindingAiAnalysis(findingId: number, deadlineMs: number, initial?: Dict): Promise<Dict> {
+  let analysis: Dict = initial ?? (await client.get(`/findings/${findingId}/ai-analysis`));
+  while (analysis.status === "PENDING" && deps.now() < deadlineMs) {
+    await deps.sleep(AI_ANALYSIS_POLL_MS);
+    analysis = await client.get(`/findings/${findingId}/ai-analysis`);
+  }
+  return analysis;
+}
+
+/** Collect analysis rows for the given ids from the execution-scoped list (paginated). */
+async function fetchExecutionAnalysesByIds(executionId: number, ids: Set<number>): Promise<Map<number, Dict>> {
+  const found = new Map<number, Dict>();
+  let page = 1;
+  while (found.size < ids.size) {
+    const data = await client.get("/findings/ai-analyses", {
+      execution_id: executionId,
+      quantity: 100,
+      page,
+      order: "DESC",
+    });
+    for (const item of data.items as Dict[]) {
+      if (ids.has(item.id)) found.set(item.id, item);
+    }
+    const total = data.total ?? 0;
+    if (!data.items.length || page * 100 >= total) break;
+    page += 1;
+  }
+  return found;
+}
+
+async function waitForExecutionAiAnalyses(
+  executionId: number,
+  analysisIds: number[],
+  deadlineMs: number,
+  initial: Dict[],
+): Promise<Dict[]> {
+  const ids = new Set(analysisIds);
+  let byId = new Map(initial.map((a) => [a.id as number, a]));
+  const pending = () => [...byId.values()].some((a) => a.status === "PENDING" && ids.has(a.id));
+  while (pending() && deps.now() < deadlineMs) {
+    await deps.sleep(AI_ANALYSIS_POLL_MS);
+    byId = await fetchExecutionAnalysesByIds(executionId, ids);
+  }
+  return analysisIds.map((id) => byId.get(id)).filter(Boolean) as Dict[];
+}
+
+export const getFindingAiAnalysis = safe(async ({ finding_id: id }: { finding_id: number }): Promise<Dict> => {
+  try {
+    return shapeAiAnalysis(await client.get(`/findings/${id}/ai-analysis`));
+  } catch (e) {
+    if (e instanceof HttpStatusError && e.status === 404) {
+      return {
+        error: shaping.clip(e.text, 2000),
+        status: 404,
+        hint: "No analysis yet. Call analyze_finding(finding_id) when the user asks to analyze.",
+      };
+    }
+    throw e;
+  }
+});
+
+export interface AnalyzeFindingArgs {
+  finding_id: number;
+  force?: boolean;
+  wait?: boolean;
+  wait_seconds?: number;
+}
+
+export const analyzeFinding = safe(async (args: AnalyzeFindingArgs): Promise<Dict> => {
+  const { finding_id: id, force = false, wait = true, wait_seconds: waitSeconds = AI_ANALYSIS_DEFAULT_WAIT } = args;
+  let analysis = await postFindingAiAnalysis(id, force);
+  if (wait && analysis.status === "PENDING") {
+    const deadline = deps.now() + clamp(waitSeconds, 0, AI_ANALYSIS_MAX_WAIT) * 1000;
+    analysis = await waitForFindingAiAnalysis(id, deadline, analysis);
+  }
+  const result = shapeAiAnalysis(analysis);
+  if (wait && analysis.status === "PENDING") {
+    result.hint = `Still PENDING after ${waitSeconds}s. Call get_finding_ai_analysis(finding_id) later.`;
+  }
+  return result;
+});
+
+export interface AnalyzeExecutionArgs {
+  execution_id: number;
+  finding_ids?: number[] | null;
+  force?: boolean;
+  wait?: boolean;
+  wait_seconds?: number;
+}
+
+export const analyzeExecution = safe(async (args: AnalyzeExecutionArgs): Promise<Dict> => {
+  const {
+    execution_id: executionId,
+    finding_ids: findingIds,
+    force = false,
+    wait = true,
+    wait_seconds: waitSeconds = AI_ANALYSIS_DEFAULT_WAIT,
+  } = args;
+
+  if (findingIds !== null && findingIds !== undefined) {
+    if (!findingIds.length) return { error: "finding_ids must be non-empty when provided (or omit it)." };
+    if (findingIds.length > MAX_AI_ANALYSIS_FINDING_IDS) {
+      return { error: `At most ${MAX_AI_ANALYSIS_FINDING_IDS} findings can be queued at once.` };
+    }
+  }
+
+  const body: Dict = { execution_id: executionId, force };
+  if (findingIds !== null && findingIds !== undefined) body.finding_ids = findingIds;
+
+  const batch = await client.post("/findings/ai-analysis", body);
+  let items: Dict[] = batch.items ?? [];
+
+  if (wait && items.some((a) => a.status === "PENDING")) {
+    const deadline = deps.now() + clamp(waitSeconds, 0, AI_ANALYSIS_MAX_WAIT) * 1000;
+    const ids = items.map((a) => a.id as number);
+    items = await waitForExecutionAiAnalyses(executionId, ids, deadline, items);
+  }
+
+  const shaped = items.map(shapeAiAnalysis);
+  const stillPending = items.some((a) => a.status === "PENDING");
+  const result: Dict = {
+    items: shaped,
+    skipped: batch.skipped ?? [],
+    omitted: batch.omitted ?? [],
+  };
+  if (wait && stillPending) {
+    result.hint = `Some analyses still PENDING after ${waitSeconds}s. Call get_finding_ai_analysis per finding_id.`;
+  } else if (shaped.some((a) => a.suggested_status)) {
+    result.hint =
+      "`suggested_status` is advisory only. Call update_finding_status only when the user asked to triage.";
+  }
+  return result;
 });
 
 export interface ListJobsArgs {
