@@ -51,6 +51,8 @@ export const MAX_AI_ANALYSIS_FINDING_IDS = 20;
 export const AI_ANALYSIS_DEFAULT_WAIT = 120;
 export const AI_ANALYSIS_MAX_WAIT = 600;
 export const AI_ANALYSIS_POLL_MS = 2000;
+export const MAX_DELETE_EXECUTIONS = 100;
+export const DELETABLE_JOB_STATUSES = ["CANCELED", "FINISHED"];
 
 /** Indirection so tests can skip real waits and fake the local runner. */
 export const deps = {
@@ -442,6 +444,34 @@ export const stopExecution = safe(async ({ execution_id: id }: { execution_id: n
   return { execution_id: id, stopped: true, hint: "Cancellation is asynchronous; call get_execution to confirm." };
 });
 
+export const deleteExecution = safe(async ({ execution_id: id }: { execution_id: number }): Promise<Dict> => {
+  const status = (await client.get(`/executions/${id}`)).status ?? null;
+  if (status === "RUNNING") {
+    return {
+      execution_id: id,
+      status,
+      deleted: false,
+      hint: "RUNNING executions cannot be deleted — stop_execution first, then delete.",
+    };
+  }
+  await client.delete(`/executions/${id}`);
+  return { execution_id: id, deleted: true };
+});
+
+export const deleteExecutions = safe(
+  async ({ execution_ids: ids }: { execution_ids: number[] }): Promise<Dict> => {
+    if (!ids.length) return { deleted: 0, hint: "No execution ids provided." };
+    if (ids.length > MAX_DELETE_EXECUTIONS) {
+      return { error: `execution_ids exceeds max ${MAX_DELETE_EXECUTIONS}.` };
+    }
+    await client.request("POST", "/executions/delete", { json: ids });
+    return {
+      deleted: ids.length,
+      hint: "RUNNING executions in the list are skipped by the API.",
+    };
+  },
+);
+
 export const getExecutionPlaybook = safe(async ({ execution_id: id }: { execution_id: number }): Promise<Dict> => {
   const text = await client.getText(`/executions/${id}/playbook`);
   return {
@@ -655,6 +685,13 @@ export const editFindingComment = safe(
   },
 );
 
+export const deleteFindingComment = safe(
+  async ({ finding_id: id, comment_id }: { finding_id: number; comment_id: number }): Promise<Dict> => {
+    await client.delete(`/findings/${id}/comments/${comment_id}`);
+    return { finding_id: id, comment_id, deleted: true };
+  },
+);
+
 function shapeAiAnalysis(analysis: Dict): Dict {
   return shaping.summarizeAiAnalysis(analysis);
 }
@@ -833,6 +870,22 @@ export const getJob = safe(async ({ job_id: id }: { job_id: number }): Promise<D
   return result;
 });
 
+export const deleteJob = safe(async ({ job_id: id }: { job_id: number }): Promise<Dict> => {
+  const job = await client.get(`/jobs/${id}`);
+  const status = job.status ?? null;
+  if (!DELETABLE_JOB_STATUSES.includes(status)) {
+    return {
+      job_id: id,
+      type: job.type ?? null,
+      status,
+      deleted: false,
+      hint: "Job must be CANCELED or FINISHED before delete (stop_scan / stop_execution first if needed).",
+    };
+  }
+  await client.delete(`/jobs/${id}`);
+  return { job_id: id, type: job.type ?? null, deleted: true };
+});
+
 export interface ScanRepositoryArgs extends PlaybookSourceArgs {
   repository: string;
   parameters?: Record<string, string[]> | null;
@@ -873,10 +926,36 @@ type VisibilityPageArgs = { visibility?: string | null; quantity?: number; page?
 
 export const listScans = safe(async (args: VisibilityPageArgs = {}) => listJobs({ ...args, type: "SCAN" }));
 
-async function requireScan(id: number): Promise<Dict | { error: string }> {
+async function requireJobType(id: number, type: string): Promise<Dict | { error: string }> {
   const job = await client.get(`/jobs/${id}`);
-  if (job.type !== "SCAN") return { error: `Job ${id} is type ${job.type ?? "unknown"}, not SCAN.` };
+  if (job.type !== type) return { error: `Job ${id} is type ${job.type ?? "unknown"}, not ${type}.` };
   return job;
+}
+
+async function requireScan(id: number): Promise<Dict | { error: string }> {
+  return requireJobType(id, "SCAN");
+}
+
+async function requireMonitor(id: number): Promise<Dict | { error: string }> {
+  return requireJobType(id, "MONITOR");
+}
+
+/** Page all executions for a job and bulk-delete non-RUNNING ones. Returns how many ids were sent. */
+async function cleanJobExecutions(jobId: number): Promise<number> {
+  const executionIds: number[] = [];
+  let page = 1;
+  while (true) {
+    const data = await client.get("/executions", { job_id: jobId, quantity: 100, page });
+    const items: Dict[] = data.items ?? [];
+    if (!items.length) break;
+    executionIds.push(...items.map((item) => item.id as number));
+    if (executionIds.length >= (data.total ?? 0)) break;
+    page += 1;
+  }
+  if (executionIds.length) {
+    await client.request("POST", "/executions/delete", { json: executionIds });
+  }
+  return executionIds.length;
 }
 
 export const stopScan = safe(async ({ scan_id: id }: { scan_id: number }): Promise<Dict> => {
@@ -942,31 +1021,26 @@ export const resumeScan = safe(async ({ scan_id: id }: { scan_id: number }): Pro
 export const cleanScan = safe(async ({ scan_id: id }: { scan_id: number }): Promise<Dict> => {
   const job = await requireScan(id);
   if ("error" in job) return job;
-
-  const executionIds: number[] = [];
-  let page = 1;
-  while (true) {
-    const data = await client.get("/executions", { job_id: id, quantity: 100, page });
-    const items: Dict[] = data.items ?? [];
-    if (!items.length) break;
-    executionIds.push(...items.map((item) => item.id as number));
-    if (executionIds.length >= (data.total ?? 0)) break;
-    page += 1;
-  }
-
-  if (executionIds.length) {
-    // Void endpoint (no JSON body); request avoids parsing an empty response.
-    await client.request("POST", "/executions/delete", { json: executionIds });
-  }
-
+  const deleted = await cleanJobExecutions(id);
   return {
     scan_id: id,
-    deleted: executionIds.length,
-    hint: "Deleted non-RUNNING reports for this scan (RUNNING ones are skipped by the API). The scan job itself remains — use stop_scan first if you want to stop it.",
+    deleted,
+    hint: "Deleted non-RUNNING reports for this scan (RUNNING ones are skipped by the API). The scan job itself remains — use stop_scan / delete_job if you want to stop or remove it.",
   };
 });
 
 export const listMonitors = safe(async (args: VisibilityPageArgs = {}) => listJobs({ ...args, type: "MONITOR" }));
+
+export const cleanMonitor = safe(async ({ monitor_id: id }: { monitor_id: number }): Promise<Dict> => {
+  const job = await requireMonitor(id);
+  if ("error" in job) return job;
+  const deleted = await cleanJobExecutions(id);
+  return {
+    monitor_id: id,
+    deleted,
+    hint: "Deleted non-RUNNING reports for this monitor (RUNNING ones are skipped by the API). The monitor job itself remains — use delete_job after it is CANCELED or FINISHED.",
+  };
+});
 
 export interface ListPlaybooksArgs {
   q?: string | null;
@@ -1132,6 +1206,30 @@ export const updateAdvisoryVisibility = safe(
     // API returns 200 with an empty body.
     await client.request("PATCH", `/external_issues/${id}`, { json: { visibility } });
     return { id, visibility };
+  },
+);
+
+export const deleteSecurityAdvisory = safe(
+  async ({ finding_id: findingId }: { finding_id: number }): Promise<Dict> => {
+    const response = await client.request("DELETE", "/external_issues/security_advisory", {
+      json: { finding_id: findingId },
+    });
+    let warning: string | null = null;
+    const text = await response.text();
+    if (text) {
+      try {
+        const data = JSON.parse(text) as Dict;
+        if (data.warning) warning = String(data.warning);
+      } catch {
+        // Empty or non-JSON body is fine.
+      }
+    }
+    const result: Dict = { finding_id: findingId, deleted: true };
+    if (warning) {
+      result.warning = warning;
+      result.hint = "Local advisory deleted; closing on GitHub may have failed — see warning.";
+    }
+    return result;
   },
 );
 

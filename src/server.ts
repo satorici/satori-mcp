@@ -14,16 +14,18 @@ export const INSTRUCTIONS =
   "Use list_jobs/get_job to find a job and its executions, and " +
   "update_finding_status to triage a finding (only when asked). " +
   "Use update_finding to change severity/assignee/status without a comment (only when asked); " +
-  "add_finding_comment / edit_finding_comment for comments (no delete); " +
+  "add_finding_comment / edit_finding_comment / delete_finding_comment for comments (only when asked); " +
   "get_finding_timeline for one finding's history, list_finding_events for an execution's event feed. " +
   "analyze_finding / analyze_execution queue server-side AI analysis with the account's AI key " +
   "(only when asked); get_finding_ai_analysis reads the latest. suggested_status is advisory — " +
   "do not call update_finding_status unless the user asked to triage. " +
-  "create_security_advisory / publish_security_advisory / update_advisory_visibility only when asked " +
-  "(no delete); get_advisory and get_advisory_status are read-only. " +
+  "create_security_advisory / publish_security_advisory / update_advisory_visibility / " +
+  "delete_security_advisory only when asked; get_advisory and get_advisory_status are read-only. " +
+  "delete_job / delete_execution / delete_executions only when asked (jobs must be CANCELED or FINISHED). " +
   "list_playbooks/get_playbook browse ready-made catalog playbooks (use via " +
   "playbook_uri); scan_repository scans one named owner/repo; " +
-  "stop_scan / pause_scan / resume_scan / clean_scan manage an existing scan (only when asked). " +
+  "stop_scan / pause_scan / resume_scan / clean_scan manage an existing scan (only when asked); " +
+  "clean_monitor deletes a monitor's reports (only when asked). " +
   "run_local runs a playbook's commands on THIS machine (results are uploaded; " +
   "analyze them with get_execution_output/list_findings). " +
   "recommend_playbook inspects a repo and proposes a lint/format/types/unit/security " +
@@ -196,6 +198,24 @@ Returns the same shape as run_playbook; analyze with get_execution_output and li
   );
 
   tool(
+    "delete_execution",
+    `Permanently delete one execution/report.
+
+Only when the user asked. Soft-fails if RUNNING — stop_execution first.`,
+    { execution_id: int() },
+    (args) => tools.deleteExecution(args),
+  );
+
+  tool(
+    "delete_executions",
+    `Bulk-delete executions by id (max ${tools.MAX_DELETE_EXECUTIONS}).
+
+Only when the user asked. RUNNING ids in the list are skipped by the API.`,
+    { execution_ids: z.array(int()).min(1) },
+    (args) => tools.deleteExecutions(args),
+  );
+
+  tool(
     "get_execution_playbook",
     "The playbook YAML an execution ran (capped), to debug or iterate on it.",
     { execution_id: int() },
@@ -307,9 +327,18 @@ update_finding_status with comment=... instead.`,
     "edit_finding_comment",
     `Edit one of your own comments on a finding (author-only).
 
-Only when the user asked. There is no delete tool for comments.`,
+Only when the user asked.`,
     { finding_id: int(), comment_id: int(), body: z.string() },
     (args) => tools.editFindingComment(args),
+  );
+
+  tool(
+    "delete_finding_comment",
+    `Soft-delete one of your own comments on a finding (author-only).
+
+Only when the user asked.`,
+    { finding_id: int(), comment_id: int() },
+    (args) => tools.deleteFindingComment(args),
   );
 
   tool(
@@ -370,6 +399,15 @@ Max 25 per page; use next_page to continue.`,
     "A job and its 5 most recent executions (no playbook body; see get_execution_playbook).",
     { job_id: int() },
     (args) => tools.getJob(args),
+  );
+
+  tool(
+    "delete_job",
+    `Permanently delete a job (RUN, SCAN, MONITOR or LOCAL) and its S3 data.
+
+Only when the user asked. Soft-fails unless status is CANCELED or FINISHED.`,
+    { job_id: int() },
+    (args) => tools.deleteJob(args),
   );
 
   tool(
@@ -438,6 +476,15 @@ Only when the user asked. Soft-fails if the scan is not RUNNING.`,
 Only when the user asked. RUNNING executions are skipped by the API.`,
     { scan_id: int() },
     (args) => tools.cleanScan(args),
+  );
+
+  tool(
+    "clean_monitor",
+    `Delete this monitor's non-RUNNING reports (executions). Does not delete the monitor job.
+
+Only when the user asked. RUNNING executions are skipped by the API. Use delete_job after the monitor is CANCELED or FINISHED.`,
+    { monitor_id: int() },
+    (args) => tools.cleanMonitor(args),
   );
 
   tool(
@@ -522,6 +569,15 @@ The state is not stored locally.`,
 Only when the user asked. Does not change the GitHub remote advisory.`,
     { advisory_id: int(), visibility: z.string() },
     (args) => tools.updateAdvisoryVisibility(args),
+  );
+
+  tool(
+    "delete_security_advisory",
+    `Delete the security advisory for a finding (PRO/ENTERPRISE; by finding_id).
+
+Only when the user asked. Removes the local row and best-effort closes on GitHub (warning if that fails).`,
+    { finding_id: int() },
+    (args) => tools.deleteSecurityAdvisory(args),
   );
 
   tool(

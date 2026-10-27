@@ -210,6 +210,37 @@ it("stop_execution only patches RUNNING", async () => {
   expect(patches).toEqual([["/executions/3", { status: "CANCELED" }]]);
 });
 
+describe("delete_execution / delete_executions / delete_job", () => {
+  it("delete_execution soft-fails while RUNNING", async () => {
+    mockClient("get", () => ({ status: "RUNNING" }));
+    const del = mockClient("delete", () => undefined);
+    expect(await tools.deleteExecution({ execution_id: 3 })).toMatchObject({ deleted: false, status: "RUNNING" });
+    expect(del).not.toHaveBeenCalled();
+
+    mockClient("get", () => ({ status: "FINISHED" }));
+    expect(await tools.deleteExecution({ execution_id: 3 })).toEqual({ execution_id: 3, deleted: true });
+    expect(del).toHaveBeenCalledWith("/executions/3");
+  });
+
+  it("delete_executions caps and posts bulk delete", async () => {
+    expect((await tools.deleteExecutions({ execution_ids: Array(101).fill(1) })).error).toContain("max");
+    const request = mockClient("request", () => new Response(null, { status: 201 }));
+    expect(await tools.deleteExecutions({ execution_ids: [1, 2] })).toMatchObject({ deleted: 2 });
+    expect(request).toHaveBeenCalledWith("POST", "/executions/delete", { json: [1, 2] });
+  });
+
+  it("delete_job requires CANCELED or FINISHED", async () => {
+    mockClient("get", () => ({ id: 4, type: "SCAN", status: "RUNNING" }));
+    const del = mockClient("delete", () => undefined);
+    expect(await tools.deleteJob({ job_id: 4 })).toMatchObject({ deleted: false, status: "RUNNING" });
+    expect(del).not.toHaveBeenCalled();
+
+    mockClient("get", () => ({ id: 4, type: "SCAN", status: "FINISHED" }));
+    expect(await tools.deleteJob({ job_id: 4 })).toEqual({ job_id: 4, type: "SCAN", deleted: true });
+    expect(del).toHaveBeenCalledWith("/jobs/4");
+  });
+});
+
 it("get_execution_playbook truncates", async () => {
   mockClient("getText", () => "x".repeat(shaping.MAX_PLAYBOOK_CHARS + 10));
   const result = await tools.getExecutionPlaybook({ execution_id: 4 });
@@ -354,6 +385,28 @@ describe("edit_finding_comment", () => {
     });
     expect(patch).toHaveBeenCalledWith("/findings/1/comments/2", { body: "fixed" });
   });
+});
+
+it("delete_finding_comment soft-deletes", async () => {
+  const del = mockClient("delete", () => undefined);
+  expect(await tools.deleteFindingComment({ finding_id: 1, comment_id: 2 })).toEqual({
+    finding_id: 1,
+    comment_id: 2,
+    deleted: true,
+  });
+  expect(del).toHaveBeenCalledWith("/findings/1/comments/2");
+});
+
+it("delete_security_advisory returns warning when present", async () => {
+  const request = mockClient(
+    "request",
+    () => new Response(JSON.stringify({ warning: "github failed" }), { status: 200 }),
+  );
+  const result = await tools.deleteSecurityAdvisory({ finding_id: 9 });
+  expect(request).toHaveBeenCalledWith("DELETE", "/external_issues/security_advisory", {
+    json: { finding_id: 9 },
+  });
+  expect(result).toMatchObject({ finding_id: 9, deleted: true, warning: "github failed" });
 });
 
 describe("AI analysis", () => {
@@ -678,6 +731,19 @@ describe("scan lifecycle", () => {
       expect.objectContaining({ scan_id: 11, deleted: 0 }),
     );
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("clean_monitor rejects non-MONITOR and deletes reports", async () => {
+    mockClient("get", () => ({ id: 12, type: "SCAN", status: "FINISHED" }));
+    expect((await tools.cleanMonitor({ monitor_id: 12 })).error).toContain("not MONITOR");
+
+    mockClient("get", (url) => {
+      if (url.startsWith("/jobs/")) return { id: 12, type: "MONITOR", status: "RUNNING" };
+      return { total: 2, items: [{ id: 1 }, { id: 2 }] };
+    });
+    const request = mockClient("request", () => new Response(null, { status: 201 }));
+    expect(await tools.cleanMonitor({ monitor_id: 12 })).toMatchObject({ monitor_id: 12, deleted: 2 });
+    expect(request).toHaveBeenCalledWith("POST", "/executions/delete", { json: [1, 2] });
   });
 });
 
