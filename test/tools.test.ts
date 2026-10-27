@@ -267,6 +267,95 @@ it("get_finding includes a capped timeline", async () => {
   expect(await tools.getFinding({ finding_id: 1, include_timeline: false })).not.toHaveProperty("timeline");
 });
 
+describe("update_finding", () => {
+  it("rejects empty and invalid fields without calling the API", async () => {
+    expect((await tools.updateFinding({ finding_id: 1 })).error).toContain("at least one");
+    expect((await tools.updateFinding({ finding_id: 1, status: "DONE" })).error).toContain("status must be");
+    expect((await tools.updateFinding({ finding_id: 1, severity: 9 })).error).toContain("severity");
+  });
+
+  it("patches only provided fields and clears with null", async () => {
+    const seen: unknown[] = [];
+    mockClient("patch", (url, body) => {
+      seen.push([url, body]);
+      return {
+        id: 3,
+        title: "t",
+        status: body.status ?? "OPEN",
+        severity: body.severity === undefined ? 2 : body.severity,
+        assignee_id: body.assignee_id === undefined ? 7 : body.assignee_id,
+        execution_id: 9,
+      };
+    });
+
+    const updated = await tools.updateFinding({ finding_id: 3, severity: 1, assignee_id: 42 });
+    expect(seen).toEqual([["/findings/3", { severity: 1, assignee_id: 42 }]]);
+    expect(updated).toMatchObject({ id: 3, severity: 1, assignee_id: 42 });
+
+    seen.length = 0;
+    await tools.updateFinding({ finding_id: 3, severity: null, assignee_id: null, status: "tp" });
+    expect(seen).toEqual([["/findings/3", { status: "TP", severity: null, assignee_id: null }]]);
+  });
+});
+
+describe("list_finding_events", () => {
+  it("requires a valid order and pages events", async () => {
+    expect((await tools.listFindingEvents({ execution_id: 1, order: "up" })).error).toContain("order");
+
+    const get = mockClient("get", () => ({
+      total: 2,
+      items: [
+        { kind: "event", id: 1, finding_id: 3, type: "CREATED", payload: {}, created_at: "a" },
+        {
+          kind: "event",
+          id: 2,
+          finding_id: 3,
+          type: "STATUS_CHANGED",
+          payload: { from: "OPEN", to: "TP" },
+          created_at: "b",
+          display_name: "Ada",
+        },
+      ],
+    }));
+    const result = await tools.listFindingEvents({ execution_id: 9, quantity: 10, page: 1, order: "asc" });
+    expect(get).toHaveBeenCalledWith("/findings/events", {
+      execution_id: 9,
+      quantity: 10,
+      page: 1,
+      order: "ASC",
+    });
+    expect(result.items).toEqual([
+      { kind: "event", id: 1, finding_id: 3, type: "CREATED", payload: {}, created_at: "a" },
+      {
+        kind: "event",
+        id: 2,
+        finding_id: 3,
+        type: "STATUS_CHANGED",
+        payload: { from: "OPEN", to: "TP" },
+        created_at: "b",
+        display_name: "Ada",
+      },
+    ]);
+    expect(result.total).toBe(2);
+  });
+});
+
+describe("edit_finding_comment", () => {
+  it("rejects empty body and patches otherwise", async () => {
+    expect((await tools.editFindingComment({ finding_id: 1, comment_id: 2, body: "  " })).error).toContain(
+      "non-empty",
+    );
+
+    const patch = mockClient("patch", () => ({ id: 2, edited_at: "2026-01-01T00:00:00Z" }));
+    expect(await tools.editFindingComment({ finding_id: 1, comment_id: 2, body: "fixed" })).toEqual({
+      finding_id: 1,
+      comment_id: 2,
+      edited_at: "2026-01-01T00:00:00Z",
+    });
+    expect(patch).toHaveBeenCalledWith("/findings/1/comments/2", { body: "fixed" });
+  });
+});
+
 describe("AI analysis", () => {
   const pending = {
     id: 10,

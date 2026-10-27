@@ -57,6 +57,25 @@ it("detailFinding clips the snapshot", () => {
   expect(result.snapshot.length).toBeLessThan(shaping.MAX_SNAPSHOT_CHARS + 100);
 });
 
+it("summarizeFinding includes assignee_id", () => {
+  expect(shaping.summarizeFinding({ id: 1, assignee_id: 9 }).assignee_id).toBe(9);
+  expect(shaping.summarizeFinding({ id: 1 }).assignee_id).toBeNull();
+});
+
+it("summarizeFindingEvent clips payload and keeps display_name", () => {
+  const event = shaping.summarizeFindingEvent({
+    kind: "event",
+    id: 2,
+    finding_id: 3,
+    type: "STATUS_CHANGED",
+    payload: { note: "n".repeat(5000) },
+    display_name: "Ada",
+    created_at: "t",
+  });
+  expect(event.display_name).toBe("Ada");
+  expect(event.payload.note.length).toBeLessThan(600);
+});
+
 it("summarizeExecutionRow works without a report", () => {
   const row = shaping.summarizeExecutionRow({ id: 1, status: "QUEUED" }, "u");
   expect(row.id).toBe(1);

@@ -154,6 +154,7 @@ export function summarizeFinding(finding: Dict): Dict {
     status: finding.status ?? null,
     source: finding.source ?? null,
     execution_id: finding.execution_id ?? null,
+    assignee_id: finding.assignee_id ?? null,
     location: clipDeep(finding.identity || {}),
   };
 }
@@ -167,6 +168,22 @@ export function detailFinding(finding: Dict): Dict {
     result.snapshot = clip(text, MAX_SNAPSHOT_CHARS);
   }
   return result;
+}
+
+/** One row from GET /findings/events (no comments — those are on the per-finding timeline). */
+export function summarizeFindingEvent(item: Dict): Dict {
+  const entry: Dict = {
+    kind: item.kind ?? "event",
+    id: item.id ?? null,
+    created_at: item.created_at ?? null,
+    finding_id: item.finding_id ?? null,
+    type: item.type ?? null,
+    payload: clipDeep(item.payload ?? null),
+  };
+  if (item.display_name !== undefined && item.display_name !== null) {
+    entry.display_name = item.display_name;
+  }
+  return entry;
 }
 
 /** AI analysis row: clipped text, capped fix steps, only useful `data` fields. */

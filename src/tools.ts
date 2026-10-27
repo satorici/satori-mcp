@@ -564,6 +564,65 @@ export const updateFindingStatus = safe(
   },
 );
 
+export interface UpdateFindingArgs {
+  finding_id: number;
+  status?: string | null;
+  severity?: number | null;
+  assignee_id?: number | null;
+}
+
+export const updateFinding = safe(async (args: UpdateFindingArgs): Promise<Dict> => {
+  const { finding_id: id } = args;
+  const body: Dict = {};
+
+  if (args.status !== undefined && args.status !== null) {
+    const status = args.status.toUpperCase();
+    if (!FINDING_STATUSES.includes(status)) return oneOf("status", FINDING_STATUSES);
+    body.status = status;
+  }
+  if (args.severity !== undefined) {
+    if (args.severity !== null && (args.severity < 0 || args.severity > 5 || !Number.isInteger(args.severity))) {
+      return { error: "severity must be an int 0-5, or null to clear." };
+    }
+    body.severity = args.severity;
+  }
+  if (args.assignee_id !== undefined) {
+    if (args.assignee_id !== null && !Number.isInteger(args.assignee_id)) {
+      return { error: "assignee_id must be an int, or null to clear." };
+    }
+    body.assignee_id = args.assignee_id;
+  }
+  if (!Object.keys(body).length) {
+    return { error: "Provide at least one of status, severity or assignee_id." };
+  }
+
+  const updated = await client.patch(`/findings/${id}`, body);
+  return shaping.detailFinding(updated);
+});
+
+export interface ListFindingEventsArgs {
+  execution_id: number;
+  quantity?: number;
+  page?: number;
+  order?: string | null;
+}
+
+export const listFindingEvents = safe(async (args: ListFindingEventsArgs): Promise<Dict> => {
+  const { execution_id, page = 1 } = args;
+  let order = args.order ? args.order.toUpperCase() : null;
+  if (order && !ORDERS.includes(order)) return oneOf("order", ORDERS);
+  const quantity = clamp(args.quantity ?? 25, 1, 25);
+  const params: Dict = { execution_id, quantity, page };
+  if (order) params.order = order;
+  const data = await client.get("/findings/events", params);
+  return shaping.paged(
+    (data.items ?? []).map(shaping.summarizeFindingEvent),
+    data.total,
+    page,
+    quantity,
+  );
+});
+
 export const addFindingComment = safe(async ({ finding_id: id, body }: { finding_id: number; body: string }) => {
   if (!body || !body.trim()) return { error: "body must be a non-empty comment." };
   if (body.length > shaping.MAX_COMMENT_CHARS) {
@@ -572,6 +631,29 @@ export const addFindingComment = safe(async ({ finding_id: id, body }: { finding
   const comment = await client.post(`/findings/${id}/comments`, { body });
   return { finding_id: id, comment_id: comment.id };
 });
+
+export const editFindingComment = safe(
+  async ({
+    finding_id: id,
+    comment_id,
+    body,
+  }: {
+    finding_id: number;
+    comment_id: number;
+    body: string;
+  }): Promise<Dict> => {
+    if (!body || !body.trim()) return { error: "body must be a non-empty comment." };
+    if (body.length > shaping.MAX_COMMENT_CHARS) {
+      return { error: `comment exceeds ${shaping.MAX_COMMENT_CHARS} characters.` };
+    }
+    const comment = await client.patch(`/findings/${id}/comments/${comment_id}`, { body });
+    return {
+      finding_id: id,
+      comment_id: comment.id ?? comment_id,
+      edited_at: comment.edited_at ?? null,
+    };
+  },
+);
 
 function shapeAiAnalysis(analysis: Dict): Dict {
   return shaping.summarizeAiAnalysis(analysis);

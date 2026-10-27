@@ -13,8 +13,9 @@ export const INSTRUCTIONS =
   "to read the YAML of a run, and stop_execution to cancel a running one. " +
   "Use list_jobs/get_job to find a job and its executions, and " +
   "update_finding_status to triage a finding (only when asked). " +
-  "Use add_finding_comment to comment without changing status, and " +
-  "get_finding_timeline for status/comment history. " +
+  "Use update_finding to change severity/assignee/status without a comment (only when asked); " +
+  "add_finding_comment / edit_finding_comment for comments (no delete); " +
+  "get_finding_timeline for one finding's history, list_finding_events for an execution's event feed. " +
   "analyze_finding / analyze_execution queue server-side AI analysis with the account's AI key " +
   "(only when asked); get_finding_ai_analysis reads the latest. suggested_status is advisory — " +
   "do not call update_finding_status unless the user asked to triage. " +
@@ -264,6 +265,35 @@ Changes shared triage state; use only when the user asked to triage this finding
   );
 
   tool(
+    "update_finding",
+    `Update a finding's status, severity and/or assignee (no comment).
+
+Only when the user asked. Provide at least one of status, severity (0-5, or null to clear)
+or assignee_id (null to clear). To triage and comment together, use update_finding_status.`,
+    {
+      finding_id: int(),
+      status: optStr(),
+      severity: optInt(),
+      assignee_id: optInt(),
+    },
+    (args) => tools.updateFinding(args),
+  );
+
+  tool(
+    "list_finding_events",
+    `Event feed for an execution's findings (CREATED, STATUS_CHANGED, SEVERITY_CHANGED, ASSIGNED, …).
+
+Does not include comments — use get_finding_timeline for those. Requires execution_id.
+order: ASC or DESC. Max 25 per page.`,
+    {
+      execution_id: int(),
+      order: optStr(),
+      ...paging(),
+    },
+    (args) => tools.listFindingEvents(args),
+  );
+
+  tool(
     "add_finding_comment",
     `Post a comment on a finding without changing its status.
 
@@ -271,6 +301,15 @@ Use only when the user asked to comment. To triage and comment together, use
 update_finding_status with comment=... instead.`,
     { finding_id: int(), body: z.string() },
     (args) => tools.addFindingComment(args),
+  );
+
+  tool(
+    "edit_finding_comment",
+    `Edit one of your own comments on a finding (author-only).
+
+Only when the user asked. There is no delete tool for comments.`,
+    { finding_id: int(), comment_id: int(), body: z.string() },
+    (args) => tools.editFindingComment(args),
   );
 
   tool(
