@@ -502,6 +502,96 @@ describe("scan_repository", () => {
   });
 });
 
+describe("scan lifecycle", () => {
+  it("stop_scan patches CANCELED and soft-fails when terminal", async () => {
+    const patches: unknown[] = [];
+    let status = "FINISHED";
+    mockClient("get", () => ({ id: 8, type: "SCAN", status }));
+    mockClient("patch", (url, body) => {
+      patches.push([url, body]);
+      return {};
+    });
+    expect(await tools.stopScan({ scan_id: 8 })).toMatchObject({ stopped: false, status: "FINISHED" });
+    expect(patches).toEqual([]);
+
+    status = "RUNNING";
+    expect(await tools.stopScan({ scan_id: 8 })).toMatchObject({ stopped: true, scan_id: 8 });
+    expect(patches).toEqual([["/jobs/scans/8", { status: "CANCELED" }]]);
+  });
+
+  it("pause_scan and resume_scan enforce status transitions", async () => {
+    const patches: unknown[] = [];
+    let status = "PAUSED";
+    mockClient("get", () => ({ id: 9, type: "SCAN", status }));
+    mockClient("patch", (url, body) => {
+      patches.push([url, body]);
+      return {};
+    });
+
+    expect(await tools.pauseScan({ scan_id: 9 })).toMatchObject({ paused: false, status: "PAUSED" });
+    expect(patches).toEqual([]);
+
+    status = "RUNNING";
+    expect(await tools.pauseScan({ scan_id: 9 })).toMatchObject({ paused: true });
+    expect(patches).toEqual([["/jobs/scans/9", { status: "PAUSED" }]]);
+
+    patches.length = 0;
+    status = "RUNNING";
+    expect(await tools.resumeScan({ scan_id: 9 })).toMatchObject({ resumed: false, status: "RUNNING" });
+    expect(patches).toEqual([]);
+
+    status = "PAUSED";
+    expect(await tools.resumeScan({ scan_id: 9 })).toMatchObject({ resumed: true });
+    expect(patches).toEqual([["/jobs/scans/9", { status: "RUNNING" }]]);
+  });
+
+  it("rejects non-SCAN jobs", async () => {
+    mockClient("get", () => ({ id: 1, type: "RUN", status: "RUNNING" }));
+    expect((await tools.stopScan({ scan_id: 1 })).error).toContain("not SCAN");
+    expect((await tools.pauseScan({ scan_id: 1 })).error).toContain("not SCAN");
+    expect((await tools.cleanScan({ scan_id: 1 })).error).toContain("not SCAN");
+  });
+
+  it("clean_scan pages executions and posts delete", async () => {
+    mockClient("get", (url, params) => {
+      if (url.startsWith("/jobs/")) return { id: 10, type: "SCAN", status: "FINISHED" };
+      if (url === "/executions") {
+        if (params?.page === 1) {
+          return { total: 150, items: Array.from({ length: 100 }, (_, i) => ({ id: i + 1 })) };
+        }
+        return { total: 150, items: Array.from({ length: 50 }, (_, i) => ({ id: i + 101 })) };
+      }
+      throw new Error(`unexpected get ${url}`);
+    });
+    const requests: unknown[] = [];
+    mockClient("request", (method, url, options) => {
+      requests.push([method, url, options?.json]);
+      return new Response(null, { status: 201 });
+    });
+
+    const result = await tools.cleanScan({ scan_id: 10 });
+    expect(result).toMatchObject({ scan_id: 10, deleted: 150 });
+    expect(requests).toEqual([
+      ["POST", "/executions/delete", Array.from({ length: 150 }, (_, i) => i + 1)],
+    ]);
+  });
+
+  it("clean_scan skips the delete call when there are no executions", async () => {
+    mockClient("get", (url) =>
+      url.startsWith("/jobs/")
+        ? { id: 11, type: "SCAN", status: "CANCELED" }
+        : { total: 0, items: [] },
+    );
+    const request = mockClient("request", () => {
+      throw new Error("should not delete");
+    });
+    expect(await tools.cleanScan({ scan_id: 11 })).toEqual(
+      expect.objectContaining({ scan_id: 11, deleted: 0 }),
+    );
+    expect(request).not.toHaveBeenCalled();
+  });
+});
+
 describe("saved inputs", () => {
   it("lists parameters and secret names for a scope", async () => {
     const get = mockClient("get", (url) =>

@@ -21,7 +21,8 @@ export const INSTRUCTIONS =
   "create_security_advisory / publish_security_advisory / update_advisory_visibility only when asked " +
   "(no delete); get_advisory and get_advisory_status are read-only. " +
   "list_playbooks/get_playbook browse ready-made catalog playbooks (use via " +
-  "playbook_uri); scan_repository scans one named owner/repo. " +
+  "playbook_uri); scan_repository scans one named owner/repo; " +
+  "stop_scan / pause_scan / resume_scan / clean_scan manage an existing scan (only when asked). " +
   "run_local runs a playbook's commands on THIS machine (results are uploaded; " +
   "analyze them with get_execution_output/list_findings). " +
   "recommend_playbook inspects a repo and proposes a lint/format/types/unit/security " +
@@ -363,6 +364,41 @@ added automatically.`,
     "List scan jobs, newest first (same as list_jobs with type=SCAN).",
     { visibility: optStr(), ...paging() },
     (args) => tools.listScans(args),
+  );
+
+  tool(
+    "stop_scan",
+    `Cancel a scan job so it stops launching new executions.
+
+Only when the user asked. Does not cancel in-flight RUNNING executions — use
+stop_execution per id for that. Soft-fails if the scan is already CANCELED or FINISHED.`,
+    { scan_id: int() },
+    (args) => tools.stopScan(args),
+  );
+
+  tool(
+    "pause_scan",
+    `Pause a RUNNING scan (no new executions until resume_scan).
+
+Only when the user asked. Soft-fails if the scan is not RUNNING.`,
+    { scan_id: int() },
+    (args) => tools.pauseScan(args),
+  );
+
+  tool(
+    "resume_scan",
+    `Resume a PAUSED scan. Only when the user asked. Soft-fails if not PAUSED.`,
+    { scan_id: int() },
+    (args) => tools.resumeScan(args),
+  );
+
+  tool(
+    "clean_scan",
+    `Delete this scan's non-RUNNING reports (executions). Does not delete the scan job.
+
+Only when the user asked. RUNNING executions are skipped by the API.`,
+    { scan_id: int() },
+    (args) => tools.cleanScan(args),
   );
 
   tool(

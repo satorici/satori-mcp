@@ -791,6 +791,99 @@ type VisibilityPageArgs = { visibility?: string | null; quantity?: number; page?
 
 export const listScans = safe(async (args: VisibilityPageArgs = {}) => listJobs({ ...args, type: "SCAN" }));
 
+async function requireScan(id: number): Promise<Dict | { error: string }> {
+  const job = await client.get(`/jobs/${id}`);
+  if (job.type !== "SCAN") return { error: `Job ${id} is type ${job.type ?? "unknown"}, not SCAN.` };
+  return job;
+}
+
+export const stopScan = safe(async ({ scan_id: id }: { scan_id: number }): Promise<Dict> => {
+  const job = await requireScan(id);
+  if ("error" in job) return job;
+  const status = job.status ?? null;
+  if (status === "CANCELED" || status === "FINISHED") {
+    return {
+      scan_id: id,
+      status,
+      stopped: false,
+      hint: "Scan is already terminal; only non-finished scans can be stopped.",
+    };
+  }
+  await client.patch(`/jobs/scans/${id}`, { status: "CANCELED" });
+  return {
+    scan_id: id,
+    stopped: true,
+    hint: "Stop cancels the scan job (no new executions). In-flight RUNNING ones keep going — use stop_execution per id for a hard stop. Call get_job to confirm.",
+  };
+});
+
+export const pauseScan = safe(async ({ scan_id: id }: { scan_id: number }): Promise<Dict> => {
+  const job = await requireScan(id);
+  if ("error" in job) return job;
+  const status = job.status ?? null;
+  if (status !== "RUNNING") {
+    return {
+      scan_id: id,
+      status,
+      paused: false,
+      hint: "Only RUNNING scans can be paused.",
+    };
+  }
+  await client.patch(`/jobs/scans/${id}`, { status: "PAUSED" });
+  return {
+    scan_id: id,
+    paused: true,
+    hint: "Scan paused (no new executions). Call resume_scan to continue, or get_job to confirm.",
+  };
+});
+
+export const resumeScan = safe(async ({ scan_id: id }: { scan_id: number }): Promise<Dict> => {
+  const job = await requireScan(id);
+  if ("error" in job) return job;
+  const status = job.status ?? null;
+  if (status !== "PAUSED") {
+    return {
+      scan_id: id,
+      status,
+      resumed: false,
+      hint: "Only PAUSED scans can be resumed.",
+    };
+  }
+  await client.patch(`/jobs/scans/${id}`, { status: "RUNNING" });
+  return {
+    scan_id: id,
+    resumed: true,
+    hint: "Scan resumed. Call get_job to follow progress.",
+  };
+});
+
+export const cleanScan = safe(async ({ scan_id: id }: { scan_id: number }): Promise<Dict> => {
+  const job = await requireScan(id);
+  if ("error" in job) return job;
+
+  const executionIds: number[] = [];
+  let page = 1;
+  while (true) {
+    const data = await client.get("/executions", { job_id: id, quantity: 100, page });
+    const items: Dict[] = data.items ?? [];
+    if (!items.length) break;
+    executionIds.push(...items.map((item) => item.id as number));
+    if (executionIds.length >= (data.total ?? 0)) break;
+    page += 1;
+  }
+
+  if (executionIds.length) {
+    // Void endpoint (no JSON body); request avoids parsing an empty response.
+    await client.request("POST", "/executions/delete", { json: executionIds });
+  }
+
+  return {
+    scan_id: id,
+    deleted: executionIds.length,
+    hint: "Deleted non-RUNNING reports for this scan (RUNNING ones are skipped by the API). The scan job itself remains — use stop_scan first if you want to stop it.",
+  };
+});
+
 export const listMonitors = safe(async (args: VisibilityPageArgs = {}) => listJobs({ ...args, type: "MONITOR" }));
 
 export interface ListPlaybooksArgs {
