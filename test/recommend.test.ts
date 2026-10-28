@@ -23,12 +23,17 @@ const REPOS: Record<string, Record<string, string>> = {
     Dockerfile: "FROM python\n",
   },
   node_pnpm: {
-    "package.json": '{"scripts": {"test": "vitest run"}, "devDependencies": {"eslint": "9"}}',
+    "package.json":
+      '{"name": "demo-app", "scripts": {"test": "vitest run"}, "devDependencies": {"eslint": "9"}}',
     "tsconfig.json": "{}",
     "pnpm-lock.yaml": "",
   },
   node_npm_nolock: { "package.json": '{"scripts": {"test": "echo no test specified"}}' },
-  go: { "go.mod": "module x\n" },
+  node_scoped: {
+    "package.json": '{"name": "@acme/widgets", "scripts": {}}',
+    "package-lock.json": "",
+  },
+  go: { "go.mod": "module github.com/acme/widget\n" },
   java_maven: { "pom.xml": "<project/>" },
   csharp: { "App.csproj": "<Project/>" },
   rust: { "Cargo.toml": '[package]\nname = "x"\n' },
@@ -217,6 +222,10 @@ it("CI importer helpers", () => {
   expect(recommend.ciImporterYaml()).toBe("import:\n- file://.satori-llm.yml\n");
   const withInstall = recommend.ciImporterYaml(["uv sync --all-groups"]);
   expect(withInstall).toBe("install:\n- uv sync --all-groups\nimport:\n- file://.satori-llm.yml\n");
+  const withName = recommend.ciImporterYaml(["uv sync"], "demo-app");
+  expect(withName).toBe(
+    "settings:\n  name: demo-app\ninstall:\n- uv sync\nimport:\n- file://.satori-llm.yml\n",
+  );
   expect(recommend.ciImportsLlm(withInstall)).toBe(true);
   expect(recommend.ciImportsLlm("import:\n  - file://.satori-llm.yml\n")).toBe(true);
   expect(recommend.ciImportsLlm("settings:\n  name: x\n")).toBe(false);
@@ -226,6 +235,26 @@ it("CI importer helpers", () => {
   expect(recommend.ciInstallMissing("install:\n- uv sync --all-groups\n", ["uv sync --all-groups", "extra"])).toEqual([
     "extra",
   ]);
+});
+
+it("projectName uses manifest, sanitizes scopes, falls back to folder", () => {
+  expect(recommend.projectName(recommend.detect(join(FIXTURES, "node_pnpm")))).toBe("demo-app");
+  expect(recommend.projectName(recommend.detect(join(FIXTURES, "py_uv")))).toBe("d");
+  expect(recommend.projectName(recommend.detect(join(FIXTURES, "node_scoped")))).toBe("widgets");
+  expect(recommend.projectName(recommend.detect(join(FIXTURES, "go")))).toBe("widget");
+  expect(recommend.projectName(recommend.detect(join(FIXTURES, "rust")))).toBe("x");
+  expect(recommend.projectName(recommend.detect(join(FIXTURES, "dart_pkg")))).toBe("example");
+  // No package.json name → directory basename
+  expect(recommend.projectName(recommend.detect(join(FIXTURES, "node_npm_nolock")))).toBe("node_npm_nolock");
+  // Empty root label → omit
+  expect(recommend.projectName(new recommend.Profile(".", "node", "npm"))).toBeNull();
+});
+
+it("LLM and CI playbooks use project-derived settings.name", () => {
+  const r = rec("node_pnpm");
+  expect(r.playbook.settings.name).toBe("demo-app quality");
+  expect(r.playbook.settings.image).toBeTruthy();
+  expect(parse(r.yaml).settings.name).toBe("demo-app quality");
 });
 
 it("LLM playbook omits install; recommendation still lists it", () => {
@@ -300,6 +329,8 @@ describe("recommend_playbook tool", () => {
     expect(result.playbook_yaml).not.toContain("\ninstall:");
     expect(result.ci_playbook_yaml).toContain(recommend.LLM_IMPORT);
     expect(result.ci_playbook_yaml).toContain("uv sync --all-groups");
+    expect(result.ci_playbook_yaml).toContain("name: d");
+    expect(result.playbook_yaml).toContain("name: d quality");
     expect(result.hint).toContain(recommend.LLM_PLAYBOOK);
     expect(result.hint).toContain(recommend.CI_PLAYBOOK);
     expect(result.hint).toContain("run_local(playbook_path='.satori-llm.yml')");

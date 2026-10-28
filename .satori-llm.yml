@@ -1,6 +1,6 @@
 # satori:recommended v2 node/pnpm
 settings:
-  name: Quality checks (node/pnpm)
+  name: satori-mcp quality
   image: node:22-slim
 types:
   tsc:

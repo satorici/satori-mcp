@@ -237,7 +237,7 @@ export const recommendPlaybook = safe(async ({ directory, prefs }: RecommendArgs
   }
 
   if (ciText === null) {
-    result.ci_playbook_yaml = recommend.ciImporterYaml(rec.install);
+    result.ci_playbook_yaml = recommend.ciImporterYaml(rec.install, recommend.projectName(profile));
     hintParts.push(
       `Also write ci_playbook_yaml to ${recommend.CI_PLAYBOOK} ` +
         "(install for CI + imports the LLM file).",

@@ -5,7 +5,7 @@
  * set of predicates the rules may use, and assembles the playbook. No network, no subprocesses.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { parse, stringify } from "yaml";
 import { SatoriError } from "./errors.js";
 import { pyRepr } from "./pyrepr.js";
@@ -325,6 +325,60 @@ export function detect(root: string): Profile {
   return profile;
 }
 
+/** Shorten scoped/path package names: `@org/pkg` → `pkg`, `a/b/c` → `c`. */
+function shortLabel(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const withoutScope = trimmed.startsWith("@") ? trimmed.slice(trimmed.lastIndexOf("/") + 1) : trimmed;
+  const segment = withoutScope.includes("/") ? withoutScope.slice(withoutScope.lastIndexOf("/") + 1) : withoutScope;
+  return segment.trim() || null;
+}
+
+function tomlName(text: string, section?: string): string | null {
+  if (section) {
+    const block = new RegExp(
+      `^\\[\\s*${escapeRegexFull(section)}\\s*\\]\\s*([\\s\\S]*?)(?=^\\[|$)`,
+      "m",
+    ).exec(text);
+    if (!block) return null;
+    text = block[1];
+  }
+  const match = /^\s*name\s*=\s*["']([^"']+)["']/m.exec(text);
+  return match ? shortLabel(match[1]) : null;
+}
+
+function yamlTopName(text: string): string | null {
+  const match = /^name:\s*["']?([^\s"'#]+)/m.exec(text);
+  return match ? shortLabel(match[1]) : null;
+}
+
+/**
+ * Best-effort project label for `settings.name`. Manifest fields first, then the
+ * directory basename; null when nothing useful is available (name is optional).
+ */
+export function projectName(profile: Profile): string | null {
+  let fromManifest: string | null = null;
+  if (profile.language === "node") {
+    fromManifest = typeof profile.packageJson.name === "string" ? shortLabel(profile.packageJson.name) : null;
+  } else if (profile.language === "python") {
+    fromManifest = tomlName(profile.pyproject, "project") ?? tomlName(profile.pyproject, "tool.poetry");
+  } else if (profile.language === "rust") {
+    fromManifest = tomlName(profile.manifest, "package");
+  } else if (profile.language === "dart") {
+    fromManifest = yamlTopName(profile.manifest);
+  } else if (profile.language === "php") {
+    fromManifest = typeof profile.composerJson.name === "string" ? shortLabel(profile.composerJson.name) : null;
+  } else if (profile.language === "go") {
+    const mod = /^\s*module\s+(\S+)/m.exec(read(join(profile.root, "go.mod")));
+    fromManifest = mod ? shortLabel(mod[1]) : null;
+  }
+  if (fromManifest) return fromManifest;
+
+  const base = basename(profile.root);
+  if (!base || base === "." || base === "/" || base === "\\") return null;
+  return shortLabel(base);
+}
+
 // ------------------------------------------------------------------------ predicates
 function evalWhen(profile: Profile, when: Dict): boolean {
   for (const [key, value] of Object.entries(when)) {
@@ -370,8 +424,9 @@ export function hasRecommendedHeader(text: string): boolean {
 }
 
 /** Minimal `.satori.yml` that installs deps (for CI) and pulls in the LLM playbook. */
-export function ciImporterYaml(install: string[] = []): string {
+export function ciImporterYaml(install: string[] = [], name: string | null = null): string {
   const doc: Dict = {};
+  if (name) doc.settings = { name };
   if (install.length) doc.install = install;
   doc.import = [LLM_IMPORT];
   return dumpYaml(doc);
@@ -594,9 +649,10 @@ export function build(
 
   // Install belongs on `.satori.yml` (CI), not the LLM playbook — keep `install` on the
   // recommendation for the CI importer / diffs, but omit it from the LLM YAML.
-  const playbook: Dict = {
-    settings: { name: `Quality checks (${profile.language}/${profile.manager})`, image: cfg.image },
-  };
+  const name = projectName(profile);
+  const settings: Dict = { image: cfg.image };
+  if (name) settings.name = `${name} quality`;
+  const playbook: Dict = { settings };
   for (const category of CATEGORIES) {
     if (Object.keys(groups[category]).length) playbook[category] = groups[category];
   }

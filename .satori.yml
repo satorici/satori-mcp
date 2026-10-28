@@ -1,3 +1,5 @@
+settings:
+  name: satori-mcp
 install:
 - corepack pnpm install --frozen-lockfile
 import:
