@@ -1,2 +1,4 @@
+install:
+- corepack pnpm install --frozen-lockfile
 import:
 - file://.satori-llm.yml

@@ -33,11 +33,12 @@ prefs:
     question: "Add pyspector security scanning?"
 
 # How each language/package manager prepares the environment and runs tools.
-#   image     playbook `settings.image` (used by remote runs)
-#   install   commands for the `install` section (`install_nolock` when no lockfile exists)
+#   image     playbook `settings.image` (used by remote runs; on the LLM playbook)
+#   install   commands for CI `.satori.yml` `install` (`install_nolock` when no lockfile);
+#             never written into `.satori-llm.yml`
 #   run       prefix for tools that live in the project environment
 #   exec      prefix for tools fetched on demand (python-tool kind uses `--from`)
-#   tool_install / tool   install step and run prefix for `kind: tool` entries
+#   tool_install / tool   CI install step and run prefix for `kind: tool` entries
 profiles:
   python:
     uv:

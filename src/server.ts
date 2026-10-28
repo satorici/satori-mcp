@@ -29,11 +29,13 @@ export const INSTRUCTIONS =
   "run_local runs a playbook's commands on THIS machine (results are uploaded; " +
   "analyze them with get_execution_output/list_findings). " +
   "recommend_playbook inspects a repo and proposes a lint/format/types/unit/security " +
-  "playbook for .satori-llm.yml (or changes to an existing one); .satori.yml is for " +
-  "CI/manual and should import file://.satori-llm.yml. Relay `questions` to the user, " +
-  "call again with `prefs`, and write files only with their approval. " +
-  "Before editing code, run_local .satori-llm.yml once as a baseline; afterwards fix " +
-  "only failures that were not in the baseline. " +
+  "playbook for .satori-llm.yml (checks only, no install) or changes to an existing one; " +
+  ".satori.yml is for CI/manual: put install there and import file://.satori-llm.yml. " +
+  "Relay `questions` to the user, call again with `prefs`, and write files only with " +
+  "their approval. Before editing code, run_local .satori-llm.yml once as a baseline; " +
+  "if a check fails because a tool or deps are missing, install on the host and re-run " +
+  "(do not add install: to .satori-llm.yml); afterwards fix only failures that were " +
+  "not in the baseline. " +
   "Saved parameters/secrets (list_saved_inputs) are applied to every new job automatically; " +
   "change them with save_parameter/save_secret/delete_* only when asked. " +
   "Playbooks read both as ${{NAME}}. " +
@@ -111,18 +113,21 @@ export function createServer(): McpServer {
 Detects the stack in \`directory\` (default: the server's current directory) for Python,
 JS/TS, Go, Java, C#, Rust, Ruby, PHP, Swift, C/C++ (CMake), Solidity (Foundry) or
 Dart/Flutter, and
-returns content for \`.satori-llm.yml\` plus a \`checks\` list explaining why each check
-is there. \`.satori.yml\` is reserved for CI/manual runs and should
-\`import: [file://.satori-llm.yml]\`.
+returns content for \`.satori-llm.yml\` (checks only — no \`install:\`) plus a \`checks\`
+list explaining why each check is there. \`.satori.yml\` is for CI/manual: put \`install\`
+there and \`import: [file://.satori-llm.yml]\` (see \`ci_playbook_yaml\`).
 
 If \`.satori-llm.yml\` already exists (or a legacy \`.satori.yml\` with
 \`# satori:recommended\`), returns \`changes\` instead of the full file; merge into
-\`.satori-llm.yml\` yourself. Only questions the repo cannot answer come back in
-\`questions\`: ask the user in chat, then call again with \`prefs\` (e.g.
-{"formatter": "black", "dead_code": false}). Prefs are saved in the LLM playbook's
-\`# satori:recommended\` header. Never write files without the user's approval.
-Workflow: run_local \`.satori-llm.yml\` BEFORE changing code to capture a baseline,
-and after each change fix only the failures that are not in the baseline.`,
+\`.satori-llm.yml\` yourself (\`move_install_to_ci\` means drop install from the LLM file).
+Only questions the repo cannot answer come back in \`questions\`: ask the user in chat,
+then call again with \`prefs\` (e.g. {"formatter": "black", "dead_code": false}). Prefs
+are saved in the LLM playbook's \`# satori:recommended\` header. Never write files without
+the user's approval.
+Workflow: run_local \`.satori-llm.yml\` BEFORE changing code to capture a baseline.
+If a check fails because a tool or deps are missing, install on the host and re-run —
+do not add \`install:\` to \`.satori-llm.yml\`. After each change fix only the failures
+that are not in the baseline.`,
     { directory: optStr(), prefs: z.record(z.string(), z.any()).nullish() },
     (args) => tools.recommendPlaybook(args),
   );

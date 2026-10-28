@@ -369,9 +369,24 @@ export function hasRecommendedHeader(text: string): boolean {
   return parseHeader(text) !== null;
 }
 
-/** Minimal `.satori.yml` that pulls in the LLM playbook. */
-export function ciImporterYaml(): string {
-  return dumpYaml({ import: [LLM_IMPORT] });
+/** Minimal `.satori.yml` that installs deps (for CI) and pulls in the LLM playbook. */
+export function ciImporterYaml(install: string[] = []): string {
+  const doc: Dict = {};
+  if (install.length) doc.install = install;
+  doc.import = [LLM_IMPORT];
+  return dumpYaml(doc);
+}
+
+/** Install steps from `wanted` that are not already present as strings in `ciText`. */
+export function ciInstallMissing(ciText: string, wanted: string[]): string[] {
+  let data: unknown;
+  try {
+    data = parse(ciText) ?? {};
+  } catch {
+    return [...wanted];
+  }
+  const present = strings(data);
+  return wanted.filter((s) => !present.has(s));
 }
 
 /** True if the CI playbook already imports `.satori-llm.yml`. */
@@ -577,10 +592,11 @@ export function build(
     });
   }
 
+  // Install belongs on `.satori.yml` (CI), not the LLM playbook — keep `install` on the
+  // recommendation for the CI importer / diffs, but omit it from the LLM YAML.
   const playbook: Dict = {
     settings: { name: `Quality checks (${profile.language}/${profile.manager})`, image: cfg.image },
   };
-  if (install.length) playbook.install = install;
   for (const category of CATEGORIES) {
     if (Object.keys(groups[category]).length) playbook[category] = groups[category];
   }
@@ -650,11 +666,14 @@ export function diffExisting(existingText: string, rec: Recommendation): Dict {
     if (current === null || current === undefined) missing.push({ ...check, suggested_yaml: fragment });
     else different.push({ ...check, existing: current, suggested_yaml: fragment });
   }
-  const installMissing = rec.install.filter((s) => !present.has(s));
+  const llmInstall = (existing as Dict).install;
+  const moveInstallToCi = Array.isArray(llmInstall)
+    ? llmInstall.filter((s): s is string => typeof s === "string")
+    : [];
   return {
     missing,
     different,
-    install_missing: installMissing,
-    up_to_date: !(missing.length || different.length || installMissing.length),
+    ...(moveInstallToCi.length ? { move_install_to_ci: moveInstallToCi } : {}),
+    up_to_date: !(missing.length || different.length || moveInstallToCi.length),
   };
 }

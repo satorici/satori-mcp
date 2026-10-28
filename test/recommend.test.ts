@@ -214,14 +214,38 @@ it("diffExisting reports missing checks and keeps present ones", () => {
 });
 
 it("CI importer helpers", () => {
-  const importer = recommend.ciImporterYaml();
-  expect(importer).toBe("import:\n- file://.satori-llm.yml\n");
-  expect(recommend.ciImportsLlm(importer)).toBe(true);
+  expect(recommend.ciImporterYaml()).toBe("import:\n- file://.satori-llm.yml\n");
+  const withInstall = recommend.ciImporterYaml(["uv sync --all-groups"]);
+  expect(withInstall).toBe("install:\n- uv sync --all-groups\nimport:\n- file://.satori-llm.yml\n");
+  expect(recommend.ciImportsLlm(withInstall)).toBe(true);
   expect(recommend.ciImportsLlm("import:\n  - file://.satori-llm.yml\n")).toBe(true);
   expect(recommend.ciImportsLlm("settings:\n  name: x\n")).toBe(false);
   expect(recommend.ciImportsLlm("import:\n  - satori://secrets/semgrep.yml\n")).toBe(false);
   expect(recommend.hasRecommendedHeader("# satori:recommended v1 python/uv\nx: 1\n")).toBe(true);
   expect(recommend.hasRecommendedHeader("settings: {}\n")).toBe(false);
+  expect(recommend.ciInstallMissing("install:\n- uv sync --all-groups\n", ["uv sync --all-groups", "extra"])).toEqual([
+    "extra",
+  ]);
+});
+
+it("LLM playbook omits install; recommendation still lists it", () => {
+  const r = rec("py_uv");
+  expect(r.install).toEqual(["uv sync --all-groups"]);
+  expect(r.playbook.install).toBeUndefined();
+  expect(parse(r.yaml).install).toBeUndefined();
+});
+
+it("diffExisting reports move_install_to_ci and not install_missing", () => {
+  const root = join(FIXTURES, "py_updated");
+  const llm =
+    "# satori:recommended v1 python/uv prefs: formatter=black dead_code=false\n" +
+    "settings:\n  name: mine\ninstall:\n- uv sync --all-groups\nlint:\n  ruff_check:\n    run:\n" +
+    "    - uvx --from ruff==0.17.0 ruff check --output-format=json .\n";
+  const r = recommend.build(recommend.detect(root), null, recommend.parseHeader(llm));
+  const changes = recommend.diffExisting(llm, r);
+  expect(changes.move_install_to_ci).toEqual(["uv sync --all-groups"]);
+  expect(changes).not.toHaveProperty("install_missing");
+  expect(changes.up_to_date).toBe(false);
 });
 
 it("no supported project is an error", () => {
@@ -273,7 +297,9 @@ describe("recommend_playbook tool", () => {
     expect(result.language).toBe("python");
     expect(result).toHaveProperty("playbook_yaml");
     expect(result).not.toHaveProperty("changes");
+    expect(result.playbook_yaml).not.toContain("\ninstall:");
     expect(result.ci_playbook_yaml).toContain(recommend.LLM_IMPORT);
+    expect(result.ci_playbook_yaml).toContain("uv sync --all-groups");
     expect(result.hint).toContain(recommend.LLM_PLAYBOOK);
     expect(result.hint).toContain(recommend.CI_PLAYBOOK);
     expect(result.hint).toContain("run_local(playbook_path='.satori-llm.yml')");
@@ -285,6 +311,7 @@ describe("recommend_playbook tool", () => {
     expect(existing.header.startsWith("# satori:recommended v3")).toBe(true);
     expect(existing).not.toHaveProperty("needs_ci_import");
     expect(existing).not.toHaveProperty("migrate_from_ci");
+    expect(existing.ci_install_missing).toEqual(["uv sync --all-groups"]);
     expect(existing.hint).toContain(recommend.LLM_PLAYBOOK);
 
     expect((await recommendPlaybook({ directory: join(FIXTURES, "nope") })).error).toContain("existing directory");
@@ -297,7 +324,8 @@ describe("recommend_playbook tool", () => {
     expect(result.existing).toBe(true);
     expect(result.migrate_from_ci).toBe(true);
     expect(result.needs_ci_import).toBe(true);
-    expect(result.ci_import_yaml).toContain(recommend.LLM_IMPORT);
+    expect(result.ci_import_yaml).toBe("import:\n- file://.satori-llm.yml\n");
+    expect(result.ci_install_missing).toEqual(["uv sync --all-groups"]);
     expect(result.hint).toContain("Move the recommended content");
     expect(result).not.toHaveProperty("playbook_yaml");
   });
@@ -305,9 +333,13 @@ describe("recommend_playbook tool", () => {
   it("suggests an import for a CI-only repo without diffing CI", async () => {
     const result = await recommendPlaybook({ directory: join(FIXTURES, "py_ci_only") });
     expect(result).toHaveProperty("playbook_yaml");
+    expect(result.playbook_yaml).not.toContain("\ninstall:");
     expect(result).not.toHaveProperty("changes");
     expect(result.needs_ci_import).toBe(true);
+    expect(result.ci_import_yaml).toBe("import:\n- file://.satori-llm.yml\n");
+    expect(result.ci_install_missing).toEqual(["uv sync --all-groups"]);
     expect(result.hint).toContain("do not overwrite");
+    expect(result.hint).toContain("ci_install_missing");
     expect(result.hint).toContain(recommend.LLM_PLAYBOOK);
   });
 

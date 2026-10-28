@@ -208,8 +208,11 @@ export const recommendPlaybook = safe(async ({ directory, prefs }: RecommendArgs
   if (existingLlm === null) {
     result.playbook_yaml = shaping.clip(rec.yaml, shaping.MAX_PLAYBOOK_CHARS);
     hintParts.push(
-      `Write playbook_yaml to ${recommend.LLM_PLAYBOOK} with the user's approval, ` +
-        `then run_local(playbook_path=${pyRepr(recommend.LLM_PLAYBOOK)}).`,
+      `Write playbook_yaml to ${recommend.LLM_PLAYBOOK} with the user's approval ` +
+        "(no install section — quality checks only), " +
+        `then run_local(playbook_path=${pyRepr(recommend.LLM_PLAYBOOK)}). ` +
+        "If a check fails because a tool or deps are missing, install on the host and re-run; " +
+        `do not add install: to ${recommend.LLM_PLAYBOOK}.`,
     );
   } else {
     result.existing = true;
@@ -220,27 +223,46 @@ export const recommendPlaybook = safe(async ({ directory, prefs }: RecommendArgs
       hintParts.push(
         `Move the recommended content out of ${recommend.CI_PLAYBOOK} into ` +
           `${recommend.LLM_PLAYBOOK}: merge \`changes\`, set the \`# satori:recommended\` ` +
-          "header line to `header`, with the user's approval.",
+          "header line to `header`, drop any top-level install from the LLM file " +
+          "(put install on CI instead), with the user's approval.",
       );
     } else {
       hintParts.push(
         `Merge \`changes\` into ${recommend.LLM_PLAYBOOK} and replace its ` +
           "`# satori:recommended` header line with `header` (add it if missing), " +
-          "with the user's approval.",
+          "with the user's approval. Keep install out of the LLM playbook " +
+          "(see `move_install_to_ci` if present).",
       );
     }
   }
 
   if (ciText === null) {
-    result.ci_playbook_yaml = recommend.ciImporterYaml();
-    hintParts.push(`Also write ci_playbook_yaml to ${recommend.CI_PLAYBOOK} (imports the LLM file).`);
+    result.ci_playbook_yaml = recommend.ciImporterYaml(rec.install);
+    hintParts.push(
+      `Also write ci_playbook_yaml to ${recommend.CI_PLAYBOOK} ` +
+        "(install for CI + imports the LLM file).",
+    );
   } else if (!recommend.ciImportsLlm(ciText)) {
     result.needs_ci_import = true;
     result.ci_import_yaml = recommend.ciImporterYaml();
+    const missingInstall = recommend.ciInstallMissing(ciText, rec.install);
+    if (missingInstall.length) result.ci_install_missing = missingInstall;
     hintParts.push(
       `Add \`import: - ${recommend.LLM_IMPORT}\` to ${recommend.CI_PLAYBOOK} ` +
-        "(see ci_import_yaml); do not overwrite existing CI checks.",
+        "(see ci_import_yaml); do not overwrite existing CI checks." +
+        (missingInstall.length
+          ? " Merge `ci_install_missing` into CI install carefully if needed."
+          : ""),
     );
+  } else if (rec.install.length) {
+    const missingInstall = recommend.ciInstallMissing(ciText, rec.install);
+    if (missingInstall.length) {
+      result.ci_install_missing = missingInstall;
+      hintParts.push(
+        `Merge \`ci_install_missing\` into ${recommend.CI_PLAYBOOK} install ` +
+          "(CI only; keep install out of the LLM playbook).",
+      );
+    }
   }
 
   if (rec.questions.length) {
