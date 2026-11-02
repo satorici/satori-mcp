@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { client, playbooksClient } from "../src/api.js";
 import { BundleCache } from "../src/bundle.js";
+import { config } from "../src/config.js";
 import { HttpStatusError } from "../src/errors.js";
 import * as shaping from "../src/shaping.js";
 import * as tools from "../src/tools.js";
@@ -1031,6 +1032,36 @@ it("auth errors become a login hint", async () => {
     throw new AuthError("Login required");
   });
   expect((await tools.whoami()).error).toBe("Not logged in. Run: satori-v2 config token <token>");
+});
+
+describe("organizations", () => {
+  it("lists organizations with the active one", async () => {
+    vi.spyOn(config, "get").mockImplementation((key) => (key === "organization" ? 7 : undefined));
+    const get = mockClient("get", () => [{ id: 7, name: "Acme", plan: "ENTERPRISE", role: "OWNER", created_at: "t" }]);
+    expect(await tools.listOrganizations()).toEqual({
+      active: "7",
+      organizations: [{ id: 7, name: "Acme", plan: "ENTERPRISE", role: "OWNER" }],
+    });
+    expect(get).toHaveBeenCalledWith("/organizations");
+  });
+
+  it("gets an organization and its members", async () => {
+    mockClient("get", (url) =>
+      url === "/organizations/7"
+        ? { id: 7, name: "Acme", plan: "ENTERPRISE", role: "ADMIN", created_at: "t" }
+        : [{ user_id: 1, name: null, email: "a@b.c", role: "MEMBER", created_at: "t" }],
+    );
+    expect(await tools.getOrganization({ organization_id: 7 })).toEqual({
+      id: 7,
+      name: "Acme",
+      plan: "ENTERPRISE",
+      role: "ADMIN",
+    });
+    expect(await tools.listOrganizationMembers({ organization_id: 7 })).toEqual({
+      organization_id: 7,
+      members: [{ user_id: 1, name: null, email: "a@b.c", role: "MEMBER" }],
+    });
+  });
 });
 
 it("doc pages and prompt mention tool output", () => {

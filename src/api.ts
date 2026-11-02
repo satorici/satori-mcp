@@ -7,6 +7,12 @@ export type Params = Record<string, unknown>;
 
 export const DEFAULT_TIMEOUT_MS = 30_000;
 
+/** Organization (tenant) id requests act on, like the CLI's `organization ID use`; own account if unset. */
+export function activeOrganization(): string | null {
+  const organization = config.get("organization");
+  return organization ? String(organization) : null;
+}
+
 export function getToken(): string {
   const token = config.get("token");
   if (token) return String(token);
@@ -46,7 +52,11 @@ export class ApiClient {
   async request(method: string, path: string, options: RequestOptions = {}): Promise<Response> {
     const url = this.url(path, options.params);
     const headers: Record<string, string> = {};
-    if (this.auth) headers.Authorization = `Bearer ${getToken()}`;
+    if (this.auth) {
+      headers.Authorization = `Bearer ${getToken()}`;
+      const organization = activeOrganization();
+      if (organization) headers["X-Satori-Organization"] = organization;
+    }
     let body: FormData | string | undefined = options.body;
     if (options.json !== undefined) {
       headers["Content-Type"] = "application/json";

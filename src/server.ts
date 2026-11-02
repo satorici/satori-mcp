@@ -36,6 +36,8 @@ export const INSTRUCTIONS =
   "if a check fails because a tool or deps are missing, install on the host and re-run " +
   "(do not add install: to .satori-llm.yml); afterwards fix only failures that were " +
   "not in the baseline. " +
+  "Every tool acts on the active organization (whoami, list_organizations: set with the " +
+  "CLI's `satori-v2 organization ID use` or SATORI_ORGANIZATION), else the user's own account. " +
   "Saved parameters/secrets (list_saved_inputs) are applied to every new job automatically; " +
   "change them with save_parameter/save_secret/delete_* only when asked. " +
   "Playbooks read both as ${{NAME}}. " +
@@ -605,6 +607,29 @@ order: ASC or DESC by last activity.`,
   const savedScopeDoc = `Without \`repository\` these are the user's own values, applied to every job;
 with "owner/repo" they apply only to that repository's runs and scans. Request values win
 over saved ones, and a repository's over the user's.`;
+
+  tool(
+    "list_organizations",
+    `List the organizations you are a member of (id, name, plan, your role) and the \`active\`
+one every other tool acts on (null: your own account). The active organization comes from
+the CLI config (\`satori-v2 organization ID use\`) or SATORI_ORGANIZATION.`,
+    {},
+    () => tools.listOrganizations(),
+  );
+
+  tool(
+    "get_organization",
+    "Name, plan and your role in an organization you are a member of.",
+    { organization_id: int() },
+    (args) => tools.getOrganization(args),
+  );
+
+  tool(
+    "list_organization_members",
+    "List an organization's members (user_id, name, email, role).",
+    { organization_id: int() },
+    (args) => tools.listOrganizationMembers(args),
+  );
 
   tool(
     "list_saved_inputs",

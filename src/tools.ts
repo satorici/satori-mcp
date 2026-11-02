@@ -9,7 +9,7 @@ import { homedir, tmpdir } from "node:os";
 import { extname, join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { setTimeout as sleep } from "node:timers/promises";
-import { client, playbooksClient } from "./api.js";
+import { activeOrganization, client, playbooksClient } from "./api.js";
 import { makeBundle, uploadBundle } from "./bundle.js";
 import { config } from "./config.js";
 import { advisoryUrl, DOCS_URL, reportUrl } from "./constants.js";
@@ -113,6 +113,7 @@ export const whoami = safe(async (): Promise<Dict> => {
   return {
     profile: config.profile,
     endpoint: client.baseUrl,
+    organization: activeOrganization(),
     notify_email: (settings.notify ?? {}).email ?? null,
     github_pat_configured: ((settings.github ?? {}).token ?? {}).configured ?? null,
   };
@@ -1270,6 +1271,27 @@ export const listRepos = safe(async (args: { order?: string | null; quantity?: n
 const savedScope = (repository?: string | null): Dict => (repository ? { repository } : {});
 const savedPath = (kind: "parameters" | "secrets", name: string) =>
   `/settings/${kind}/${encodeURIComponent(name)}`;
+
+const shapeOrganization = (o: Dict): Dict => ({ id: o.id, name: o.name, plan: o.plan, role: o.role });
+
+export const listOrganizations = safe(async (): Promise<Dict> => ({
+  active: activeOrganization(),
+  organizations: (await client.get<Dict[]>("/organizations")).map(shapeOrganization),
+}));
+
+export const getOrganization = safe(async ({ organization_id: id }: { organization_id: number }) =>
+  shapeOrganization(await client.get(`/organizations/${id}`)),
+);
+
+export const listOrganizationMembers = safe(async ({ organization_id: id }: { organization_id: number }) => ({
+  organization_id: id,
+  members: (await client.get<Dict[]>(`/organizations/${id}/members`)).map((m) => ({
+    user_id: m.user_id,
+    name: m.name,
+    email: m.email,
+    role: m.role,
+  })),
+}));
 
 export const listSavedInputs = safe(async ({ repository }: { repository?: string | null } = {}): Promise<Dict> => {
   const params = savedScope(repository);

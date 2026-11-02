@@ -3,9 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { unzipSync } from "fflate";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildQuery } from "../src/api.js";
+import { ApiClient, buildQuery } from "../src/api.js";
 import { dumpFileUris, makeBundle } from "../src/bundle.js";
-import { Config } from "../src/config.js";
+import { Config, config } from "../src/config.js";
 import { SatoriError } from "../src/errors.js";
 import { CLONE_ATTEMPTS, cloneRepo, gitDeps } from "../src/git.js";
 import { runTestFilter } from "../src/outputs.js";
@@ -110,6 +110,25 @@ describe("config", () => {
     const env = new Config({ SATORI_TOKEN: "e", SATORI_PROFILE: "work" }, [], file);
     expect(env.profile).toBe("work");
     expect(env.get("token")).toBe("e");
+  });
+});
+
+describe("ApiClient", () => {
+  async function sentHeaders(settings: Record<string, unknown>): Promise<Record<string, string>> {
+    vi.spyOn(config, "get").mockImplementation((key) => settings[key]);
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
+    await new ApiClient("https://api.test", true).get("/jobs");
+    return fetch.mock.calls[0][1]!.headers as Record<string, string>;
+  }
+
+  it("sends the configured organization", async () => {
+    const headers = await sentHeaders({ token: "t", organization: 7 });
+    expect(headers.Authorization).toBe("Bearer t");
+    expect(headers["X-Satori-Organization"]).toBe("7");
+  });
+
+  it("acts on the own account without one", async () => {
+    expect(await sentHeaders({ token: "t", organization: null })).not.toHaveProperty("X-Satori-Organization");
   });
 });
 

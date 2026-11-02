@@ -36,6 +36,8 @@ Local build config: `{"command": "node", "args": ["/path/to/satori-mcp/dist/inde
 Credentials are shared with the CLI: `~/.satori_credentials.yml` profiles (`--profile X` or
 `SATORI_PROFILE`), overridden by `SATORI_*` env vars (e.g. `SATORI_TOKEN`). Endpoints:
 `SATORI_ENDPOINT`, `SATORI_PLAYBOOKS_ENDPOINT`, `SATORI_DASHBOARD_URL`, `SATORI_DOCS_URL`.
+Requests act on the profile's `organization` (`satori-v2 organization ID use`) or
+`SATORI_ORGANIZATION`, sent as `X-Satori-Organization`; your own account if unset.
 
 ## Layout
 
