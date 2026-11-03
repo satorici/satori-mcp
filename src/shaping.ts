@@ -326,10 +326,11 @@ export function summarizeAdvisory(advisory: Dict): Dict {
   };
 }
 
-/** Full advisory: clipped description and vulnerabilities. */
-export function detailAdvisory(advisory: Dict, advisoryUrl: string | null = null): Dict {
+/** Full advisory: description (clipped unless `fullDescription`) and clipped vulnerabilities. */
+export function detailAdvisory(advisory: Dict, advisoryUrl: string | null = null, fullDescription = false): Dict {
   const result = summarizeAdvisory(advisory);
-  result.description = clip(advisory.description ?? null, MAX_ADVISORY_DESCRIPTION_CHARS);
+  const description = advisory.description ?? null;
+  result.description = fullDescription ? description : clip(description, MAX_ADVISORY_DESCRIPTION_CHARS);
   if (advisory.vulnerabilities !== undefined && advisory.vulnerabilities !== null) {
     result.vulnerabilities = clipDeep(advisory.vulnerabilities, MAX_FIELD_CHARS);
   }

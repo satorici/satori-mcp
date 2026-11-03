@@ -964,6 +964,39 @@ describe("security advisories", () => {
     expect(result.advisory_url).toContain("/advisories/42");
     expect(result.description.length).toBeLessThan(shaping.MAX_ADVISORY_DESCRIPTION_CHARS + 100);
     expect(result.vulnerabilities).toBeDefined();
+    const full = await tools.getAdvisory({ advisory_id: 42, full_description: true });
+    expect(full.description).toBe("z".repeat(10_000));
+  });
+
+  it("update_advisory patches only the fields passed", async () => {
+    const patches: unknown[] = [];
+    mockClient("request", (method, path, options) => {
+      patches.push([method, path, options?.json]);
+      return new Response(null);
+    });
+    expect((await tools.updateAdvisory({ advisory_id: 42 })).error).toBe("Pass title and/or description.");
+    expect(patches).toEqual([]);
+
+    expect(await tools.updateAdvisory({ advisory_id: 42, title: "Plain title" })).toMatchObject({
+      id: 42,
+      updated: ["title"],
+    });
+    expect(await tools.updateAdvisory({ advisory_id: 42, title: "T", description: "Body" })).toMatchObject({
+      updated: ["title", "description"],
+    });
+    expect(patches).toEqual([
+      ["PATCH", "/external_issues/42", { title: "Plain title" }],
+      ["PATCH", "/external_issues/42", { title: "T", description: "Body" }],
+    ]);
+  });
+
+  it("update_advisory explains a published advisory's 409", async () => {
+    mockClient("request", (_method, path) => {
+      throw new HttpStatusError(409, "A published advisory cannot be edited; edit it on GitHub instead", path);
+    });
+    const result = await tools.updateAdvisory({ advisory_id: 42, title: "T" });
+    expect(result.status).toBe(409);
+    expect(result.hint).toContain("edit it there");
   });
 
   it("create_security_advisory posts a draft", async () => {

@@ -65,6 +65,7 @@ it("exposes every tool, resource and prompt of the Python server", async () => {
       "publish_security_advisory",
       "get_advisory_status",
       "update_advisory_visibility",
+      "update_advisory",
       "delete_security_advisory",
       "list_monitors",
       "list_repos",

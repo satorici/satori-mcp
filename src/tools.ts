@@ -1201,9 +1201,9 @@ export const listAdvisories = safe(async (args: ListAdvisoriesArgs = {}): Promis
   return shaping.paged(data.items.map(shaping.summarizeAdvisory), data.total, page, quantity);
 });
 
-function shapeAdvisoryDetail(advisory: Dict): Dict {
+function shapeAdvisoryDetail(advisory: Dict, fullDescription = false): Dict {
   const id = advisory.id as number | null | undefined;
-  return shaping.detailAdvisory(advisory, id != null ? advisoryUrl(id) : null);
+  return shaping.detailAdvisory(advisory, id != null ? advisoryUrl(id) : null, fullDescription);
 }
 
 async function findSecurityAdvisoryForFinding(findingId: number): Promise<Dict | null> {
@@ -1215,8 +1215,9 @@ async function findSecurityAdvisoryForFinding(findingId: number): Promise<Dict |
   return data.items?.[0] ?? null;
 }
 
-export const getAdvisory = safe(async ({ advisory_id: id }: { advisory_id: number }): Promise<Dict> =>
-  shapeAdvisoryDetail(await client.get(`/external_issues/${id}`)),
+export const getAdvisory = safe(
+  async ({ advisory_id: id, full_description }: { advisory_id: number; full_description?: boolean | null }) =>
+    shapeAdvisoryDetail(await client.get(`/external_issues/${id}`), full_description ?? false),
 );
 
 export interface CreateSecurityAdvisoryArgs {
@@ -1290,6 +1291,31 @@ export const updateAdvisoryVisibility = safe(
     return { id, visibility };
   },
 );
+
+export interface UpdateAdvisoryArgs {
+  advisory_id: number;
+  title?: string | null;
+  description?: string | null;
+}
+
+export const updateAdvisory = safe(async ({ advisory_id: id, title, description }: UpdateAdvisoryArgs) => {
+  const json: Dict = {};
+  if (title != null) json.title = title;
+  if (description != null) json.description = description;
+  if (Object.keys(json).length === 0) return { error: "Pass title and/or description." };
+  try {
+    // API returns 200 with an empty body.
+    await client.request("PATCH", `/external_issues/${id}`, { json });
+  } catch (e) {
+    const result = errorResult(e);
+    if (result === null) throw e;
+    if (result.status === 409) {
+      result.hint = "Only a draft can be edited; a published advisory's text is fixed on GitHub, edit it there.";
+    }
+    return result;
+  }
+  return { id, updated: Object.keys(json), advisory_url: advisoryUrl(id) };
+});
 
 export const deleteSecurityAdvisory = safe(
   async ({ finding_id: findingId }: { finding_id: number }): Promise<Dict> => {

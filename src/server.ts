@@ -1,6 +1,7 @@
 /** Local stdio MCP server: registers the Satori tools, doc resources and prompt. */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { MAX_ADVISORY_DESCRIPTION_CHARS } from "./shaping.js";
 import * as tools from "./tools.js";
 
 export const INSTRUCTIONS =
@@ -19,7 +20,7 @@ export const INSTRUCTIONS =
   "analyze_finding / analyze_execution queue server-side AI analysis with the account's AI key " +
   "(only when asked); get_finding_ai_analysis reads the latest. suggested_status is advisory — " +
   "do not call update_finding_status unless the user asked to triage. " +
-  "create_security_advisory / publish_security_advisory / update_advisory_visibility / " +
+  "create_security_advisory / publish_security_advisory / update_advisory / update_advisory_visibility / " +
   "delete_security_advisory only when asked; get_advisory and get_advisory_status are read-only. " +
   "delete_job / delete_execution / delete_executions only when asked (jobs must be CANCELED or FINISHED). " +
   "update_execution_visibility changes a report's visibility (only when asked). " +
@@ -564,8 +565,9 @@ not the full advisory text; use get_advisory for details.`,
 
   tool(
     "get_advisory",
-    "Details of one external issue / security advisory (description capped), with advisory_url.",
-    { advisory_id: int() },
+    `Details of one external issue / security advisory, with advisory_url. The description is
+capped at ${MAX_ADVISORY_DESCRIPTION_CHARS} chars unless full_description=true (use that before update_advisory).`,
+    { advisory_id: int(), full_description: z.boolean().nullish() },
     (args) => tools.getAdvisory(args),
   );
 
@@ -609,6 +611,17 @@ The state is not stored locally.`,
 Only when the user asked. Does not change the GitHub remote advisory.`,
     { advisory_id: int(), visibility: z.string() },
     (args) => tools.updateAdvisoryVisibility(args),
+  );
+
+  tool(
+    "update_advisory",
+    `Edit a draft advisory's title and/or description (Markdown), e.g. to humanize the generated
+technical detail before publishing. Each field passed replaces the whole value.
+
+Only when the user asked. Drafts only; a published advisory is edited on GitHub. Read the full
+text first with get_advisory(full_description=true).`,
+    { advisory_id: int(), title: optStr(), description: optStr() },
+    (args) => tools.updateAdvisory(args),
   );
 
   tool(
