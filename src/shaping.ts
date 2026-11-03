@@ -60,6 +60,7 @@ export function summarizeExecution(execution: Dict, reportUrl: string | null = n
     status: execution.status ?? null,
     created_at: execution.created_at ?? null,
     job_id: execution.job_id ?? null,
+    visibility: execution.visibility ?? null,
     total_fails: report.total_fails ?? null,
     severities: report.severities ?? null,
     tests,

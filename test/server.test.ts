@@ -28,6 +28,7 @@ it("exposes every tool, resource and prompt of the Python server", async () => {
       "list_executions",
       "list_reports",
       "stop_execution",
+      "update_execution_visibility",
       "delete_execution",
       "delete_executions",
       "get_execution_playbook",

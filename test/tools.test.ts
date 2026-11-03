@@ -211,6 +211,23 @@ it("stop_execution only patches RUNNING", async () => {
   expect(patches).toEqual([["/executions/3", { status: "CANCELED" }]]);
 });
 
+it("update_execution_visibility validates and patches", async () => {
+  expect((await tools.updateExecutionVisibility({ execution_id: 1, visibility: "secret" })).error).toContain(
+    "visibility must be",
+  );
+  const request = mockClient("request", (method, path, options) => {
+    expect(method).toBe("PATCH");
+    expect(path).toBe("/executions/7");
+    expect(options?.json).toEqual({ visibility: "UNLISTED" });
+    return new Response(null);
+  });
+  expect(await tools.updateExecutionVisibility({ execution_id: 7, visibility: "unlisted" })).toEqual({
+    execution_id: 7,
+    visibility: "UNLISTED",
+  });
+  expect(request).toHaveBeenCalled();
+});
+
 describe("delete_execution / delete_executions / delete_job", () => {
   it("delete_execution soft-fails while RUNNING", async () => {
     mockClient("get", () => ({ status: "RUNNING" }));

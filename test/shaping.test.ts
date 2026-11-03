@@ -35,9 +35,10 @@ it("summarizeExecution caps tests and drops logs", () => {
   }));
   detail[0].asserts = [{ msg: "y".repeat(5000) }];
   const summary = shaping.summarizeExecution(
-    { id: 1, status: "FINISHED", report: { total_fails: 2, detail } },
+    { id: 1, status: "FINISHED", visibility: "UNLISTED", report: { total_fails: 2, detail } },
     "http://r/1",
   );
+  expect(summary.visibility).toBe("UNLISTED");
   expect(summary.tests).toHaveLength(shaping.MAX_TESTS);
   expect(summary.truncated).toBe(true);
   expect(summary.tests_total).toBe(80);

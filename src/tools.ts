@@ -467,6 +467,16 @@ export const stopExecution = safe(async ({ execution_id: id }: { execution_id: n
   return { execution_id: id, stopped: true, hint: "Cancellation is asynchronous; call get_execution to confirm." };
 });
 
+export const updateExecutionVisibility = safe(
+  async ({ execution_id: id, visibility }: { execution_id: number; visibility: string }): Promise<Dict> => {
+    visibility = visibility.toUpperCase();
+    if (!VISIBILITIES.includes(visibility)) return oneOf("visibility", VISIBILITIES);
+    // API returns 200 with an empty body.
+    await client.request("PATCH", `/executions/${id}`, { json: { visibility } });
+    return { execution_id: id, visibility };
+  },
+);
+
 export const deleteExecution = safe(async ({ execution_id: id }: { execution_id: number }): Promise<Dict> => {
   const status = (await client.get(`/executions/${id}`)).status ?? null;
   if (status === "RUNNING") {

@@ -22,6 +22,7 @@ export const INSTRUCTIONS =
   "create_security_advisory / publish_security_advisory / update_advisory_visibility / " +
   "delete_security_advisory only when asked; get_advisory and get_advisory_status are read-only. " +
   "delete_job / delete_execution / delete_executions only when asked (jobs must be CANCELED or FINISHED). " +
+  "update_execution_visibility changes a report's visibility (only when asked). " +
   "list_playbooks/get_playbook browse ready-made catalog playbooks (use via " +
   "playbook_uri); scan_repository scans one named owner/repo; " +
   "stop_scan / pause_scan / resume_scan / clean_scan manage an existing scan (only when asked); " +
@@ -202,6 +203,15 @@ Returns the same shape as run_playbook; analyze with get_execution_output and li
     "Cancel a RUNNING execution (e.g. after run_playbook with wait=false).",
     { execution_id: int() },
     (args) => tools.stopExecution(args),
+  );
+
+  tool(
+    "update_execution_visibility",
+    `Change an execution/report's visibility (PUBLIC, PRIVATE or UNLISTED).
+
+Only when the user asked.`,
+    { execution_id: int(), visibility: z.string() },
+    (args) => tools.updateExecutionVisibility(args),
   );
 
   tool(
