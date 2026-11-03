@@ -29,7 +29,7 @@ export const INSTRUCTIONS =
   "stop_scan / pause_scan / resume_scan / clean_scan manage an existing scan (only when asked); " +
   "stop_run cancels one RUN job and its in-flight executions, stop_all_runs every active run " +
   "(only when asked). " +
-  "clean_monitor deletes a monitor's reports (only when asked). " +
+  "create_monitor schedules a playbook (only when asked); clean_monitor deletes a monitor's reports (only when asked). " +
   "run_local runs a playbook's commands on THIS machine (results are uploaded; " +
   "analyze them with get_execution_output/list_findings). " +
   "recommend_playbook inspects a repo and proposes a lint/format/types/unit/security " +
@@ -638,6 +638,26 @@ Only when the user asked. Removes the local row and best-effort closes on GitHub
     "List monitor jobs with their schedule `expression` (read-only; same as list_jobs type=MONITOR).",
     { visibility: optStr(), ...paging() },
     (args) => tools.listMonitors(args),
+  );
+
+  tool(
+    "create_monitor",
+    `Create a monitor: a playbook Satori runs on a schedule (UTC), each run a new execution/report.
+
+Only when the user asked. Provide EXACTLY ONE of playbook_path, playbook_yaml or playbook_uri.
+\`expression\` is rate(N minute|hour|day[s]) or cron(<5-field cron>), e.g. rate(1 hour) or
+cron(0 3 * * *). Without it the playbook's settings.monitor, settings.rate or settings.cron is
+used (a catalog playbook_uri needs an explicit expression). visibility: PUBLIC, PRIVATE or
+UNLISTED (default PRIVATE). Saved parameters/secrets are added automatically.`,
+    {
+      ...playbookSource,
+      expression: optStr(),
+      parameters: parameters(),
+      secrets: secrets(),
+      regions: z.array(z.string()).nullish(),
+      visibility: optStr(),
+    },
+    (args) => tools.createMonitor(args),
   );
 
   tool(

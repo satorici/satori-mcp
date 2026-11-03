@@ -9,6 +9,7 @@ import { homedir, tmpdir } from "node:os";
 import { extname, join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { setTimeout as sleep } from "node:timers/promises";
+import { parse as parseYaml } from "yaml";
 import { activeOrganization, client, playbooksClient } from "./api.js";
 import { makeBundle, uploadBundle } from "./bundle.js";
 import { config } from "./config.js";
@@ -304,6 +305,10 @@ export const runPlaybook = safe(async (args: RunPlaybookArgs = {}): Promise<Dict
   });
   const jobId = run.id;
   const result: Dict = { job_id: jobId, status: run.status ?? null, playbook_source: source };
+  const schedule = monitorExpression(playbookSettings(args));
+  if (schedule) {
+    result.monitor_hint = `The playbook has a schedule (${schedule}); this ran it once. Use create_monitor to schedule it.`;
+  }
 
   const executionId = await firstExecutionId(jobId);
   result.execution_id = executionId;
@@ -328,6 +333,62 @@ export const runPlaybook = safe(async (args: RunPlaybookArgs = {}): Promise<Dict
     result.hint = `Still ${status} after ${waitSeconds}s. Call get_execution(execution_id) later.`;
   }
   return result;
+});
+
+/** The playbook's `settings`, read from playbook_yaml or playbook_path; `{}` for a catalog URI or bad YAML. */
+function playbookSettings({ playbook_yaml: yaml, playbook_path: path }: PlaybookSourceArgs): Dict {
+  let text: string | null = yaml ?? null;
+  if (text === null && path && isFile(expandUser(path))) text = readFileSync(expandUser(path), "utf-8");
+  if (text === null) return {};
+  try {
+    const settings = (parseYaml(text) ?? {}).settings;
+    return shaping.isDict(settings) ? settings : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Like the CLI's `monitor_expression`: settings.monitor as is, else rate(...) or cron(...). */
+export function monitorExpression(settings: Dict): string | null {
+  if (settings.monitor) return String(settings.monitor);
+  if (settings.rate) return `rate(${settings.rate})`;
+  if (settings.cron) return `cron(${settings.cron})`;
+  return null;
+}
+
+export interface CreateMonitorArgs extends PlaybookSourceArgs {
+  expression?: string | null;
+  parameters?: Record<string, string[]> | null;
+  secrets?: Record<string, string> | null;
+  regions?: string[] | null;
+  visibility?: string | null;
+}
+
+export const createMonitor = safe(async (args: CreateMonitorArgs): Promise<Dict> => {
+  const expression = args.expression || monitorExpression(playbookSettings(args));
+  if (!expression) {
+    return {
+      error:
+        "No schedule: pass expression (e.g. rate(1 hour), cron(0 3 * * *)) or set settings.cron/rate in the playbook.",
+    };
+  }
+  const visibility = (args.visibility ?? "PRIVATE").toUpperCase();
+  if (!VISIBILITIES.includes(visibility)) return oneOf("visibility", VISIBILITIES);
+
+  const source = await bundleSource(args.playbook_path, args.playbook_yaml, args.playbook_uri);
+  const monitor = await client.post("/jobs/monitors", {
+    playbook_source: source,
+    expression,
+    parameters: args.parameters || {},
+    secrets: args.secrets || {},
+    regions: args.regions || [],
+    visibility,
+    with_files: false,
+  });
+  return {
+    ...shaping.summarizeJob(monitor),
+    hint: "Runs on its schedule (UTC). See its reports with list_executions(job_id=...); delete them with clean_monitor.",
+  };
 });
 
 export interface RunLocalArgs extends PlaybookSourceArgs {

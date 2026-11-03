@@ -807,6 +807,72 @@ describe("scan lifecycle", () => {
   });
 });
 
+describe("create_monitor", () => {
+  it("derives the schedule like the CLI", () => {
+    expect(tools.monitorExpression({ monitor: "rate(5 minutes)", rate: "1 day", cron: "0 3 * * *" })).toBe(
+      "rate(5 minutes)",
+    );
+    expect(tools.monitorExpression({ rate: "1 day", cron: "0 3 * * *" })).toBe("rate(1 day)");
+    expect(tools.monitorExpression({ cron: "0 3 * * *" })).toBe("cron(0 3 * * *)");
+    expect(tools.monitorExpression({})).toBeNull();
+  });
+
+  function mockMonitorApi() {
+    mockClient("postForm", () => "m1");
+    return mockClient("post", (url, body) => {
+      expect(url).toBe("/jobs/monitors");
+      return { id: 30, type: "MONITOR", status: "RUNNING", expression: body.expression, visibility: body.visibility };
+    });
+  }
+
+  it("posts a monitor with the playbook's cron", async () => {
+    const post = mockMonitorApi();
+    const result = await tools.createMonitor({
+      playbook_yaml: "settings:\n  cron: 0 3 * * *\ntest:\n  run: [echo monitor-cron]\n",
+      parameters: { HOST: ["a.com"] },
+    });
+    expect(result).toMatchObject({ id: 30, type: "MONITOR", expression: "cron(0 3 * * *)", visibility: "PRIVATE" });
+    expect(post.mock.calls[0][1]).toMatchObject({
+      expression: "cron(0 3 * * *)",
+      parameters: { HOST: ["a.com"] },
+      visibility: "PRIVATE",
+      with_files: false,
+    });
+    expect((post.mock.calls[0][1] as any).playbook_source).toMatch(/^bundle:\/\//);
+  });
+
+  it("an explicit expression wins over the playbook's settings", async () => {
+    const post = mockMonitorApi();
+    await tools.createMonitor({
+      playbook_yaml: "settings:\n  rate: 1 day\ntest:\n  run: [echo monitor-explicit]\n",
+      expression: "rate(1 hour)",
+      visibility: "unlisted",
+    });
+    expect(post.mock.calls[0][1]).toMatchObject({ expression: "rate(1 hour)", visibility: "UNLISTED" });
+  });
+
+  it("refuses without a schedule or with a bad visibility, before any request", async () => {
+    expect((await tools.createMonitor({ playbook_uri: "satori://code/python/x.yml" })).error).toContain(
+      "No schedule",
+    );
+    expect(
+      (await tools.createMonitor({ playbook_uri: "satori://code/python/x.yml", expression: "rate(1 day)", visibility: "x" }))
+        .error,
+    ).toContain("visibility must be");
+  });
+
+  it("run_playbook points a scheduled playbook at create_monitor", async () => {
+    mockClient("postForm", () => "b9");
+    mockClient("post", () => ({ id: 7, status: "QUEUED" }));
+    mockClient("get", () => ({ items: [{ id: 99 }] }));
+    const result = await tools.runPlaybook({
+      playbook_yaml: "settings:\n  rate: 1 day\ntest:\n  run: [echo run-once]\n",
+      wait: false,
+    });
+    expect(result.monitor_hint).toContain("create_monitor");
+  });
+});
+
 describe("saved inputs", () => {
   it("lists parameters and secret names for a scope", async () => {
     const get = mockClient("get", (url) =>

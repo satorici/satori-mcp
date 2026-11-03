@@ -36,7 +36,7 @@ export function clipDeep(value: unknown, limit: number = MAX_FIELD_CHARS): any {
   return clip(value, limit);
 }
 
-const isDict = (v: unknown): v is Dict => typeof v === "object" && v !== null && !Array.isArray(v);
+export const isDict = (v: unknown): v is Dict => typeof v === "object" && v !== null && !Array.isArray(v);
 
 /** Status plus assertion results, never raw logs. */
 export function summarizeExecution(execution: Dict, reportUrl: string | null = null): Dict {

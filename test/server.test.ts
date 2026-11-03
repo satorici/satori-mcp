@@ -68,6 +68,7 @@ it("exposes every tool, resource and prompt of the Python server", async () => {
       "update_advisory",
       "delete_security_advisory",
       "list_monitors",
+      "create_monitor",
       "list_repos",
       "list_organizations",
       "get_organization",
