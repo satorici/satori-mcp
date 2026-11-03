@@ -1342,15 +1342,86 @@ export const getOrganization = safe(async ({ organization_id: id }: { organizati
   shapeOrganization(await client.get(`/organizations/${id}`)),
 );
 
+const shapeMember = (m: Dict): Dict => ({ user_id: m.user_id, name: m.name, email: m.email, role: m.role });
+
+export const ROLES = ["OWNER", "ADMIN", "MEMBER"];
+
 export const listOrganizationMembers = safe(async ({ organization_id: id }: { organization_id: number }) => ({
   organization_id: id,
-  members: (await client.get<Dict[]>(`/organizations/${id}/members`)).map((m) => ({
-    user_id: m.user_id,
-    name: m.name,
-    email: m.email,
-    role: m.role,
-  })),
+  members: (await client.get<Dict[]>(`/organizations/${id}/members`)).map(shapeMember),
 }));
+
+export const createOrganization = safe(async ({ name }: { name: string }): Promise<Dict> => {
+  const organization = shapeOrganization(await client.post("/organizations", { name }));
+  return { ...organization, hint: `Call use_organization(organization_id=${organization.id}) to act on it.` };
+});
+
+export const renameOrganization = safe(
+  async ({ organization_id: id, name }: { organization_id: number; name: string }): Promise<Dict> =>
+    shapeOrganization(await client.patch(`/organizations/${id}`, { name })),
+);
+
+/** Saves the active organization like the CLI's `organization ID use` / `organization personal`. */
+function saveActiveOrganization(id: number | null): Dict {
+  config.save("organization", id);
+  const result: Dict = { active: activeOrganization(), profile: config.profile };
+  if (config.envOverrides("organization")) {
+    result.hint = "SATORI_ORGANIZATION is set and takes precedence over the saved organization.";
+  }
+  return result;
+}
+
+export const deleteOrganization = safe(
+  async ({ organization_id: id, confirm_name }: { organization_id: number; confirm_name: string }): Promise<Dict> => {
+    const { name } = await client.get(`/organizations/${id}`);
+    if (confirm_name !== name) {
+      return {
+        organization_id: id,
+        deleted: false,
+        hint: `confirm_name must be the organization's exact name (${JSON.stringify(name)}).`,
+      };
+    }
+    await client.delete(`/organizations/${id}`);
+    const result: Dict = { organization_id: id, deleted: true };
+    if (activeOrganization() === String(id)) result.active = saveActiveOrganization(null).active;
+    return result;
+  },
+);
+
+function parseRole(role: string): string | { error: string } {
+  role = role.toUpperCase();
+  return ROLES.includes(role) ? role : oneOf("role", ROLES);
+}
+
+export const addOrganizationMember = safe(
+  async ({ organization_id: id, email, role = "MEMBER" }: { organization_id: number; email: string; role?: string }) => {
+    const parsed = parseRole(role);
+    if (typeof parsed !== "string") return parsed;
+    return shapeMember(await client.post(`/organizations/${id}/members`, { email, role: parsed }));
+  },
+);
+
+export const updateOrganizationMemberRole = safe(
+  async ({ organization_id: id, user_id, role }: { organization_id: number; user_id: number; role: string }) => {
+    const parsed = parseRole(role);
+    if (typeof parsed !== "string") return parsed;
+    return shapeMember(await client.patch(`/organizations/${id}/members/${user_id}`, { role: parsed }));
+  },
+);
+
+export const removeOrganizationMember = safe(
+  async ({ organization_id: id, user_id }: { organization_id: number; user_id: number }): Promise<Dict> => {
+    await client.delete(`/organizations/${id}/members/${user_id}`);
+    return { organization_id: id, user_id, removed: true };
+  },
+);
+
+export const useOrganization = safe(async ({ organization_id: id }: { organization_id: number }): Promise<Dict> => {
+  await client.get(`/organizations/${id}`);
+  return saveActiveOrganization(id);
+});
+
+export const usePersonalAccount = safe(async (): Promise<Dict> => saveActiveOrganization(null));
 
 export const listSavedInputs = safe(async ({ repository }: { repository?: string | null } = {}): Promise<Dict> => {
   const params = savedScope(repository);

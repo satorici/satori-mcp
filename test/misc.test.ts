@@ -1,8 +1,9 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { unzipSync } from "fflate";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { parse } from "yaml";
 import { ApiClient, buildQuery } from "../src/api.js";
 import { dumpFileUris, makeBundle } from "../src/bundle.js";
 import { Config, config } from "../src/config.js";
@@ -110,6 +111,29 @@ describe("config", () => {
     const env = new Config({ SATORI_TOKEN: "e", SATORI_PROFILE: "work" }, [], file);
     expect(env.profile).toBe("work");
     expect(env.get("token")).toBe("e");
+  });
+
+  it("saves to the active profile like the CLI, keeping everything else", () => {
+    const dir = mkdtempSync(join(tmpdir(), "satori-config-"));
+    const file = join(dir, "creds.yml");
+    writeFileSync(file, "default:\n  token: d\n  organization: 3\nwork:\n  token: w\n");
+    const work = new Config({}, ["node", "x", "--profile", "work"], file);
+    work.save("organization", 7);
+    expect(work.get("organization")).toBe(7);
+    expect(parse(readFileSync(file, "utf-8"))).toEqual({
+      default: { token: "d", organization: 3 },
+      work: { token: "w", organization: 7 },
+    });
+
+    work.save("organization", null);
+    expect(work.get("organization")).toBeNull();
+    expect(new Config({}, ["node", "x", "--profile", "work"], file).get("organization")).toBeNull();
+    expect(new Config({}, [], file).get("organization")).toBe(3);
+  });
+
+  it("reports env overrides", () => {
+    expect(new Config({ SATORI_ORGANIZATION: "9" }, [], "/nonexistent").envOverrides("organization")).toBe(true);
+    expect(new Config({}, [], "/nonexistent").envOverrides("organization")).toBe(false);
   });
 });
 

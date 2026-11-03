@@ -1121,6 +1121,114 @@ describe("organizations", () => {
       members: [{ user_id: 1, name: null, email: "a@b.c", role: "MEMBER" }],
     });
   });
+
+  /** In-memory stand-in for the credentials file, so tests never write ~/.satori_credentials.yml. */
+  function savedOrganization(initial: unknown = null) {
+    const state = { organization: initial };
+    vi.spyOn(config, "get").mockImplementation((key) => (key === "organization" ? state.organization : undefined));
+    const save = vi.spyOn(config, "save").mockImplementation((key, value) => {
+      if (key === "organization") state.organization = value;
+    });
+    return { state, save };
+  }
+
+  const org = { id: 7, name: "Acme", plan: "ENTERPRISE", role: "OWNER", created_at: "t" };
+  const member = { user_id: 2, name: "Bo", email: "b@c.d", role: "ADMIN", created_at: "t" };
+
+  it("creates and renames organizations", async () => {
+    mockClient("post", (url, body) => {
+      expect([url, body]).toEqual(["/organizations", { name: "Acme" }]);
+      return org;
+    });
+    expect(await tools.createOrganization({ name: "Acme" })).toMatchObject({ id: 7, name: "Acme", role: "OWNER" });
+    mockClient("patch", (url, body) => {
+      expect([url, body]).toEqual(["/organizations/7", { name: "Acme 2" }]);
+      return { ...org, name: "Acme 2" };
+    });
+    expect(await tools.renameOrganization({ organization_id: 7, name: "Acme 2" })).toEqual({
+      id: 7,
+      name: "Acme 2",
+      plan: "ENTERPRISE",
+      role: "OWNER",
+    });
+  });
+
+  it("deletes only with the exact name and leaves a deleted active organization", async () => {
+    const { state } = savedOrganization(7);
+    mockClient("get", () => org);
+    const del = mockClient("delete", () => undefined);
+    expect(await tools.deleteOrganization({ organization_id: 7, confirm_name: "acme" })).toMatchObject({
+      deleted: false,
+    });
+    expect(del).not.toHaveBeenCalled();
+    expect(await tools.deleteOrganization({ organization_id: 7, confirm_name: "Acme" })).toEqual({
+      organization_id: 7,
+      deleted: true,
+      active: null,
+    });
+    expect(del).toHaveBeenCalledWith("/organizations/7");
+    expect(state.organization).toBeNull();
+  });
+
+  it("deleting another organization keeps the active one", async () => {
+    const { save } = savedOrganization(3);
+    mockClient("get", () => org);
+    mockClient("delete", () => undefined);
+    expect(await tools.deleteOrganization({ organization_id: 7, confirm_name: "Acme" })).toEqual({
+      organization_id: 7,
+      deleted: true,
+    });
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("adds, re-roles and removes members", async () => {
+    expect((await tools.addOrganizationMember({ organization_id: 7, email: "b@c.d", role: "boss" })).error).toContain(
+      "role must be",
+    );
+    const posts: unknown[] = [];
+    mockClient("post", (url, body) => {
+      posts.push([url, body]);
+      return member;
+    });
+    expect(await tools.addOrganizationMember({ organization_id: 7, email: "b@c.d" })).toEqual({
+      user_id: 2,
+      name: "Bo",
+      email: "b@c.d",
+      role: "ADMIN",
+    });
+    expect(posts).toEqual([["/organizations/7/members", { email: "b@c.d", role: "MEMBER" }]]);
+
+    mockClient("patch", (url, body) => {
+      expect([url, body]).toEqual(["/organizations/7/members/2", { role: "OWNER" }]);
+      return { ...member, role: "OWNER" };
+    });
+    expect(await tools.updateOrganizationMemberRole({ organization_id: 7, user_id: 2, role: "owner" })).toMatchObject({
+      role: "OWNER",
+    });
+
+    const del = mockClient("delete", () => undefined);
+    expect(await tools.removeOrganizationMember({ organization_id: 7, user_id: 2 })).toEqual({
+      organization_id: 7,
+      user_id: 2,
+      removed: true,
+    });
+    expect(del).toHaveBeenCalledWith("/organizations/7/members/2");
+  });
+
+  it("switches to an organization only after checking membership, and back to personal", async () => {
+    const { state, save } = savedOrganization();
+    mockClient("get", () => {
+      throw new HttpStatusError(404, "Not Found", "/organizations/8");
+    });
+    expect((await tools.useOrganization({ organization_id: 8 })).status).toBe(404);
+    expect(save).not.toHaveBeenCalled();
+
+    mockClient("get", () => org);
+    expect(await tools.useOrganization({ organization_id: 7 })).toEqual({ active: "7", profile: config.profile });
+    expect(state.organization).toBe(7);
+    expect(await tools.usePersonalAccount()).toEqual({ active: null, profile: config.profile });
+    expect(state.organization).toBeNull();
+  });
 });
 
 it("doc pages and prompt mention tool output", () => {

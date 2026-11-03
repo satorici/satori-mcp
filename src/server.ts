@@ -39,8 +39,11 @@ export const INSTRUCTIONS =
   "if a check fails because a tool or deps are missing, install on the host and re-run " +
   "(do not add install: to .satori-llm.yml); afterwards fix only failures that were " +
   "not in the baseline. " +
-  "Every tool acts on the active organization (whoami, list_organizations: set with the " +
-  "CLI's `satori-v2 organization ID use` or SATORI_ORGANIZATION), else the user's own account. " +
+  "Every tool acts on the active organization (whoami, list_organizations: switch with " +
+  "use_organization / use_personal_account, saved to the CLI config like `satori-v2 organization ID use`, " +
+  "or SATORI_ORGANIZATION), else the user's own account. " +
+  "create_organization / rename_organization / delete_organization and add/update_role/remove " +
+  "organization members only when asked. " +
   "Saved parameters/secrets (list_saved_inputs) are applied to every new job automatically; " +
   "change them with save_parameter/save_secret/delete_* only when asked. " +
   "Playbooks read both as ${{NAME}}. " +
@@ -642,7 +645,8 @@ over saved ones, and a repository's over the user's.`;
     "list_organizations",
     `List the organizations you are a member of (id, name, plan, your role) and the \`active\`
 one every other tool acts on (null: your own account). The active organization comes from
-the CLI config (\`satori-v2 organization ID use\`) or SATORI_ORGANIZATION.`,
+the CLI config (use_organization / use_personal_account, or \`satori-v2 organization ID use\`)
+or SATORI_ORGANIZATION.`,
     {},
     () => tools.listOrganizations(),
   );
@@ -659,6 +663,75 @@ the CLI config (\`satori-v2 organization ID use\`) or SATORI_ORGANIZATION.`,
     "List an organization's members (user_id, name, email, role).",
     { organization_id: int() },
     (args) => tools.listOrganizationMembers(args),
+  );
+
+  tool(
+    "create_organization",
+    `Create an organization; you become its OWNER. Needs your own account on the ENTERPRISE plan.
+
+Only when the user asked. Does not switch to it; call use_organization for that.`,
+    { name: z.string() },
+    (args) => tools.createOrganization(args),
+  );
+
+  tool(
+    "rename_organization",
+    "Rename an organization (OWNER or ADMIN).\n\nOnly when the user asked.",
+    { organization_id: int(), name: z.string() },
+    (args) => tools.renameOrganization(args),
+  );
+
+  tool(
+    "delete_organization",
+    `Permanently delete an organization and all of its jobs, reports and findings (OWNER only).
+
+Only when the user asked. confirm_name must be the organization's exact name. If it was the
+active organization, you are switched back to your own account.`,
+    { organization_id: int(), confirm_name: z.string() },
+    (args) => tools.deleteOrganization(args),
+  );
+
+  tool(
+    "add_organization_member",
+    `Add a user by email (they must have logged in to Satori before). role: ${tools.ROLES.join(", ")} (default MEMBER).
+
+Only when the user asked. OWNER or ADMIN only; only an OWNER can add an OWNER.`,
+    { organization_id: int(), email: z.string(), role: z.string().optional() },
+    (args) => tools.addOrganizationMember(args),
+  );
+
+  tool(
+    "update_organization_member_role",
+    `Change a member's role (${tools.ROLES.join(", ")}).
+
+Only when the user asked. Only an OWNER grants or revokes OWNER; an organization keeps at least one.`,
+    { organization_id: int(), user_id: int(), role: z.string() },
+    (args) => tools.updateOrganizationMemberRole(args),
+  );
+
+  tool(
+    "remove_organization_member",
+    `Remove a member by user_id, or leave the organization with your own user_id.
+
+Only when the user asked. An organization keeps at least one OWNER.`,
+    { organization_id: int(), user_id: int() },
+    (args) => tools.removeOrganizationMember(args),
+  );
+
+  tool(
+    "use_organization",
+    `Make every other tool act on this organization. Saved to the CLI config like
+\`satori-v2 organization ID use\`, so the CLI follows it too.`,
+    { organization_id: int() },
+    (args) => tools.useOrganization(args),
+  );
+
+  tool(
+    "use_personal_account",
+    `Act on your own account again instead of an organization. Saved to the CLI config like
+\`satori-v2 organizations personal\`.`,
+    {},
+    () => tools.usePersonalAccount(),
   );
 
   tool(
