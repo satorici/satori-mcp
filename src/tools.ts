@@ -973,6 +973,55 @@ async function requireMonitor(id: number): Promise<Dict | { error: string }> {
   return requireJobType(id, "MONITOR");
 }
 
+async function requireRun(id: number): Promise<Dict | { error: string }> {
+  return requireJobType(id, "RUN");
+}
+
+/** Newest runs stop_all_runs looks at, the same window as the CLI's `stop all`. */
+export const STOP_ALL_RUNS_WINDOW = 100;
+
+async function cancelRun(id: number): Promise<void> {
+  // API returns 200 with an empty body.
+  await client.request("PATCH", `/jobs/runs/${id}`, { json: { status: "CANCELED" } });
+}
+
+export const stopRun = safe(async ({ run_id: id }: { run_id: number }): Promise<Dict> => {
+  const job = await requireRun(id);
+  if ("error" in job) return job;
+  const status = job.status ?? null;
+  if (DELETABLE_JOB_STATUSES.includes(status)) {
+    return { run_id: id, status, stopped: false, hint: "Run is already terminal; only active runs can be stopped." };
+  }
+  await cancelRun(id);
+  return {
+    run_id: id,
+    stopped: true,
+    hint: "Canceling a run also stops its in-flight executions. Call get_job to confirm.",
+  };
+});
+
+export const stopAllRuns = safe(async (): Promise<Dict> => {
+  const { items } = await client.get("/jobs", {
+    type: "RUN",
+    quantity: STOP_ALL_RUNS_WINDOW,
+    page: 1,
+    order: "DESC",
+  });
+  const active: number[] = items
+    .filter((job: Dict) => !DELETABLE_JOB_STATUSES.includes(job.status))
+    .map((job: Dict) => job.id);
+  const results = await Promise.allSettled(active.map(cancelRun));
+  const stopped: number[] = [];
+  const failed: Dict[] = [];
+  results.forEach((result, i) => {
+    if (result.status === "fulfilled") stopped.push(active[i]);
+    else failed.push({ run_id: active[i], ...(errorResult(result.reason) ?? { error: String(result.reason) }) });
+  });
+  const summary: Dict = { checked: items.length, stopped, failed };
+  if (active.length === 0) summary.hint = `No active runs among the newest ${STOP_ALL_RUNS_WINDOW}.`;
+  return summary;
+});
+
 /** Page all executions for a job and bulk-delete non-RUNNING ones. Returns how many ids were sent. */
 async function cleanJobExecutions(jobId: number): Promise<number> {
   const executionIds: number[] = [];

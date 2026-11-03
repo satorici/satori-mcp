@@ -51,6 +51,8 @@ it("exposes every tool, resource and prompt of the Python server", async () => {
       "scan_repository",
       "list_scans",
       "stop_scan",
+      "stop_run",
+      "stop_all_runs",
       "pause_scan",
       "resume_scan",
       "clean_scan",

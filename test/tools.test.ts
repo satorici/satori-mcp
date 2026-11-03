@@ -679,6 +679,48 @@ describe("scan lifecycle", () => {
     expect(patches).toEqual([["/jobs/scans/8", { status: "CANCELED" }]]);
   });
 
+  it("stop_run cancels active runs, soft-fails when terminal, rejects other job types", async () => {
+    const patches: unknown[] = [];
+    let job: Record<string, unknown> = { id: 8, type: "RUN", status: "FINISHED" };
+    mockClient("get", () => job);
+    mockClient("request", (method, path, options) => {
+      patches.push([method, path, options?.json]);
+      return new Response(null);
+    });
+    expect(await tools.stopRun({ run_id: 8 })).toMatchObject({ stopped: false, status: "FINISHED" });
+    job = { id: 8, type: "SCAN", status: "RUNNING" };
+    expect((await tools.stopRun({ run_id: 8 })).error).toContain("not RUN");
+    expect(patches).toEqual([]);
+
+    job = { id: 8, type: "RUN", status: "WAITING_FILES" };
+    expect(await tools.stopRun({ run_id: 8 })).toMatchObject({ stopped: true, run_id: 8 });
+    expect(patches).toEqual([["PATCH", "/jobs/runs/8", { status: "CANCELED" }]]);
+  });
+
+  it("stop_all_runs cancels only active runs and reports failures", async () => {
+    mockClient("get", (url, params) => {
+      expect(url).toBe("/jobs");
+      expect(params).toMatchObject({ type: "RUN", quantity: tools.STOP_ALL_RUNS_WINDOW });
+      return {
+        items: [
+          { id: 1, status: "RUNNING" },
+          { id: 2, status: "FINISHED" },
+          { id: 3, status: "QUEUED" },
+          { id: 4, status: "CANCELED" },
+        ],
+      };
+    });
+    mockClient("request", (_method, path) => {
+      if (path === "/jobs/runs/3") throw new HttpStatusError(404, "Not Found", path);
+      return new Response(null);
+    });
+    expect(await tools.stopAllRuns()).toEqual({
+      checked: 4,
+      stopped: [1],
+      failed: [{ run_id: 3, error: "Not Found", status: 404 }],
+    });
+  });
+
   it("pause_scan and resume_scan enforce status transitions", async () => {
     const patches: unknown[] = [];
     let status = "PAUSED";

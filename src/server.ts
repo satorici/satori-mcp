@@ -26,6 +26,8 @@ export const INSTRUCTIONS =
   "list_playbooks/get_playbook browse ready-made catalog playbooks (use via " +
   "playbook_uri); scan_repository scans one named owner/repo; " +
   "stop_scan / pause_scan / resume_scan / clean_scan manage an existing scan (only when asked); " +
+  "stop_run cancels one RUN job and its in-flight executions, stop_all_runs every active run " +
+  "(only when asked). " +
   "clean_monitor deletes a monitor's reports (only when asked). " +
   "run_local runs a playbook's commands on THIS machine (results are uploaded; " +
   "analyze them with get_execution_output/list_findings). " +
@@ -468,6 +470,24 @@ Only when the user asked. Does not cancel in-flight RUNNING executions — use
 stop_execution per id for that. Soft-fails if the scan is already CANCELED or FINISHED.`,
     { scan_id: int() },
     (args) => tools.stopScan(args),
+  );
+
+  tool(
+    "stop_run",
+    `Cancel a RUN job and its in-flight executions.
+
+Only when the user asked. Soft-fails if the run is already CANCELED or FINISHED.`,
+    { run_id: int() },
+    (args) => tools.stopRun(args),
+  );
+
+  tool(
+    "stop_all_runs",
+    `Cancel every active RUN job among the newest ${tools.STOP_ALL_RUNS_WINDOW}.
+
+Only when the user asked. Scans and monitors are left alone; use stop_scan for a scan.`,
+    {},
+    () => tools.stopAllRuns(),
   );
 
   tool(
