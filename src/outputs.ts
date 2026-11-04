@@ -36,7 +36,7 @@ function decodeValue(value: unknown): unknown {
 }
 
 /** Fetch and decode the msgpack execution outputs (bytes become strings). */
-export async function loadExecutionOutputs(executionId: number): Promise<Dict[]> {
+export async function loadExecutionOutputs(executionId: string): Promise<Dict[]> {
   const response = await client.stream(`/executions/${executionId}/output`);
   const outputs: Dict[] = [];
   if (!response.body) return outputs;

@@ -8,6 +8,7 @@ import { config } from "../src/config.js";
 import { HttpStatusError } from "../src/errors.js";
 import * as shaping from "../src/shaping.js";
 import * as tools from "../src/tools.js";
+import { pid } from "./ids.js";
 
 type Handler = (url: string, arg?: any) => any;
 
@@ -55,18 +56,18 @@ describe("run_playbook", () => {
     });
     const post = mockClient("post", (url) => {
       posts.push(url);
-      return { id: 7, status: "QUEUED" };
+      return { id: pid(7), status: "QUEUED" };
     });
     mockClient("get", (url) => {
-      if (url === "/executions") return { items: [{ id: 99 }] };
-      if (url === "/jobs/7") return { status: "FINISHED" };
-      return { id: 99, status: "FINISHED", report: { total_fails: 0, detail: [] } };
+      if (url === "/executions") return { items: [{ id: pid(99) }] };
+      if (url === `/jobs/${pid(7)}`) return { status: "FINISHED" };
+      return { id: pid(99), status: "FINISHED", report: { total_fails: 0, detail: [] } };
     });
 
     const result = await tools.runPlaybook({ playbook_yaml: "test:\n  assertStdoutContains: x\n" });
     expect(posts).toEqual(["/bundles", "/jobs/runs"]);
     expect((post.mock.calls[0][1] as any).playbook_source).toBe("bundle://b1");
-    expect(result.execution_id).toBe(99);
+    expect(result.execution_id).toBe(pid(99));
     expect(result.execution.total_fails).toBe(0);
     expect(result).not.toHaveProperty("error");
   });
@@ -75,7 +76,7 @@ describe("run_playbook", () => {
     const posts: [string, string][] = [];
     mockClient("post", (url, body) => {
       posts.push([url, body.playbook_source]);
-      return { id: 1, status: "QUEUED" };
+      return { id: pid(1), status: "QUEUED" };
     });
     mockClient("get", () => ({ items: [] }));
     await tools.runPlaybook({ playbook_uri: "satori://code/x.yml", wait: false });
@@ -84,7 +85,7 @@ describe("run_playbook", () => {
   });
 
   it("sends secrets without echoing them", async () => {
-    const post = mockClient("post", () => ({ id: 1, status: "QUEUED" }));
+    const post = mockClient("post", () => ({ id: pid(1), status: "QUEUED" }));
     mockClient("get", () => ({ items: [] }));
     const result = await tools.runPlaybook({ playbook_uri: "satori://a.yml", secrets: { TOKEN: "s3cr3t" } });
     expect((post.mock.calls[0][1] as any).secrets).toEqual({ TOKEN: "s3cr3t" });
@@ -99,7 +100,7 @@ it("turns HTTP errors into error objects", async () => {
   mockClient("get", () => {
     throw new HttpStatusError(403, "plan", "http://x");
   });
-  const result = await tools.getExecution({ execution_id: 1 });
+  const result = await tools.getExecution({ execution_id: pid(1) });
   expect(result.status).toBe(403);
   expect(result.hint).toContain("PRO");
 });
@@ -108,7 +109,7 @@ it("hints AI Settings when AI analysis returns 409", async () => {
   mockClient("request", () => {
     throw new HttpStatusError(409, "No provider selected", "http://x");
   });
-  const result = await tools.analyzeFinding({ finding_id: 1, wait: false });
+  const result = await tools.analyzeFinding({ finding_id: pid(1), wait: false });
   expect(result.status).toBe(409);
   expect(result.hint).toBe(tools.AI_ANALYSIS_409_HINT);
 });
@@ -116,7 +117,7 @@ it("hints AI Settings when AI analysis returns 409", async () => {
 describe("get_execution_output", () => {
   it("returns only an index without test", async () => {
     vi.spyOn(tools.deps, "loadExecutionOutputs").mockResolvedValue([{ path: "cmd.0", output: { stdout: "a\nb" } }]);
-    const result = await tools.getExecutionOutput({ execution_id: 1 });
+    const result = await tools.getExecutionOutput({ execution_id: pid(1) });
     expect(result.tests).toEqual([{ path: "cmd.0", stdout_lines: 2 }]);
     expect(result).not.toHaveProperty("text");
   });
@@ -125,18 +126,18 @@ describe("get_execution_output", () => {
     vi.spyOn(tools.deps, "loadExecutionOutputs").mockImplementation(async () => [
       { path: "cmd.0", output: { stdout: Array.from({ length: 50 }, (_, i) => String(i)).join("\n") } },
     ]);
-    const result = await tools.getExecutionOutput({ execution_id: 1, test: "cmd.0", tail_lines: 5 });
+    const result = await tools.getExecutionOutput({ execution_id: pid(1), test: "cmd.0", tail_lines: 5 });
     expect(result.text.split("\n")).toEqual(["45", "46", "47", "48", "49"]);
     expect(result.next_offset_from_end).toBe(5);
-    const stderr = await tools.getExecutionOutput({ execution_id: 1, test: "cmd.0.stderr" });
+    const stderr = await tools.getExecutionOutput({ execution_id: pid(1), test: "cmd.0.stderr" });
     expect(stderr.text).toBe("");
     expect(stderr.stream).toBe("stderr");
   });
 
   it("reports unknown tests and streams", async () => {
     vi.spyOn(tools.deps, "loadExecutionOutputs").mockResolvedValue([{ path: "cmd.0", output: {} }]);
-    expect((await tools.getExecutionOutput({ execution_id: 1, test: "nope" })).error).toBe("No test matches 'nope'.");
-    expect((await tools.getExecutionOutput({ execution_id: 1, stream: "x" })).error).toBe(
+    expect((await tools.getExecutionOutput({ execution_id: pid(1), test: "nope" })).error).toBe("No test matches 'nope'.");
+    expect((await tools.getExecutionOutput({ execution_id: pid(1), stream: "x" })).error).toBe(
       "stream must be one of ('stdout', 'stderr', 'os_error')",
     );
   });
@@ -148,12 +149,12 @@ describe("list_executions", () => {
     mockClient("get", (_url, params) => {
       Object.assign(seen, params);
       return {
-        items: [{ id: 5, status: "FINISHED", job_id: 2, job: { type: "RUN" }, report: { total_fails: 1 } }],
+        items: [{ id: pid(5), status: "FINISHED", job_id: pid(2), job: { type: "RUN" }, report: { total_fails: 1 } }],
         total: 60,
       };
     });
     const result = await tools.listExecutions({
-      job_id: 2,
+      job_id: pid(2),
       status: ["FINISHED"],
       from_: "2026-01-01",
       to: "2026-02-01",
@@ -161,22 +162,22 @@ describe("list_executions", () => {
       severity: 0,
       playbook: "satori://a.yml",
       tags: ["env:prod"],
-      id_gt: 10,
-      id_lt: 99,
+      id_gt: pid(10),
+      id_lt: pid(99),
       global_: true,
       quantity: 500,
     });
     expect(seen).toMatchObject({
       quantity: 25,
       from: "2026-01-01",
-      job_id: 2,
+      job_id: pid(2),
       order: "DESC",
       visibility: "PUBLIC",
       severity: 0,
       playbook: "satori://a.yml",
       tags: ["env:prod"],
-      id_gt: 10,
-      id_lt: 99,
+      id_gt: pid(10),
+      id_lt: pid(99),
       global: true,
     });
     expect(result.next_page).toBe(2);
@@ -204,25 +205,25 @@ it("stop_execution only patches RUNNING", async () => {
     patches.push([url, body]);
     return {};
   });
-  expect((await tools.stopExecution({ execution_id: 3 })).stopped).toBe(false);
+  expect((await tools.stopExecution({ execution_id: pid(3) })).stopped).toBe(false);
   expect(patches).toEqual([]);
   status = "RUNNING";
-  expect((await tools.stopExecution({ execution_id: 3 })).stopped).toBe(true);
-  expect(patches).toEqual([["/executions/3", { status: "CANCELED" }]]);
+  expect((await tools.stopExecution({ execution_id: pid(3) })).stopped).toBe(true);
+  expect(patches).toEqual([[`/executions/${pid(3)}`, { status: "CANCELED" }]]);
 });
 
 it("update_execution_visibility validates and patches", async () => {
-  expect((await tools.updateExecutionVisibility({ execution_id: 1, visibility: "secret" })).error).toContain(
+  expect((await tools.updateExecutionVisibility({ execution_id: pid(1), visibility: "secret" })).error).toContain(
     "visibility must be",
   );
   const request = mockClient("request", (method, path, options) => {
     expect(method).toBe("PATCH");
-    expect(path).toBe("/executions/7");
+    expect(path).toBe(`/executions/${pid(7)}`);
     expect(options?.json).toEqual({ visibility: "UNLISTED" });
     return new Response(null);
   });
-  expect(await tools.updateExecutionVisibility({ execution_id: 7, visibility: "unlisted" })).toEqual({
-    execution_id: 7,
+  expect(await tools.updateExecutionVisibility({ execution_id: pid(7), visibility: "unlisted" })).toEqual({
+    execution_id: pid(7),
     visibility: "UNLISTED",
   });
   expect(request).toHaveBeenCalled();
@@ -232,41 +233,41 @@ describe("delete_execution / delete_executions / delete_job", () => {
   it("delete_execution soft-fails while RUNNING", async () => {
     mockClient("get", () => ({ status: "RUNNING" }));
     const del = mockClient("delete", () => undefined);
-    expect(await tools.deleteExecution({ execution_id: 3 })).toMatchObject({ deleted: false, status: "RUNNING" });
+    expect(await tools.deleteExecution({ execution_id: pid(3) })).toMatchObject({ deleted: false, status: "RUNNING" });
     expect(del).not.toHaveBeenCalled();
 
     mockClient("get", () => ({ status: "FINISHED" }));
-    expect(await tools.deleteExecution({ execution_id: 3 })).toEqual({ execution_id: 3, deleted: true });
-    expect(del).toHaveBeenCalledWith("/executions/3");
+    expect(await tools.deleteExecution({ execution_id: pid(3) })).toEqual({ execution_id: pid(3), deleted: true });
+    expect(del).toHaveBeenCalledWith(`/executions/${pid(3)}`);
   });
 
   it("delete_executions caps and posts bulk delete", async () => {
-    expect((await tools.deleteExecutions({ execution_ids: Array(101).fill(1) })).error).toContain("max");
+    expect((await tools.deleteExecutions({ execution_ids: Array(101).fill(pid(1)) })).error).toContain("max");
     const request = mockClient("request", () => new Response(null, { status: 201 }));
-    expect(await tools.deleteExecutions({ execution_ids: [1, 2] })).toMatchObject({ deleted: 2 });
-    expect(request).toHaveBeenCalledWith("POST", "/executions/delete", { json: [1, 2] });
+    expect(await tools.deleteExecutions({ execution_ids: [pid(1), pid(2)] })).toMatchObject({ deleted: 2 });
+    expect(request).toHaveBeenCalledWith("POST", "/executions/delete", { json: [pid(1), pid(2)] });
   });
 
   it("delete_job requires CANCELED or FINISHED", async () => {
-    mockClient("get", () => ({ id: 4, type: "SCAN", status: "RUNNING" }));
+    mockClient("get", () => ({ id: pid(4), type: "SCAN", status: "RUNNING" }));
     const del = mockClient("delete", () => undefined);
-    expect(await tools.deleteJob({ job_id: 4 })).toMatchObject({ deleted: false, status: "RUNNING" });
+    expect(await tools.deleteJob({ job_id: pid(4) })).toMatchObject({ deleted: false, status: "RUNNING" });
     expect(del).not.toHaveBeenCalled();
 
-    mockClient("get", () => ({ id: 4, type: "SCAN", status: "FINISHED" }));
-    expect(await tools.deleteJob({ job_id: 4 })).toEqual({ job_id: 4, type: "SCAN", deleted: true });
-    expect(del).toHaveBeenCalledWith("/jobs/4");
+    mockClient("get", () => ({ id: pid(4), type: "SCAN", status: "FINISHED" }));
+    expect(await tools.deleteJob({ job_id: pid(4) })).toEqual({ job_id: pid(4), type: "SCAN", deleted: true });
+    expect(del).toHaveBeenCalledWith(`/jobs/${pid(4)}`);
   });
 });
 
 it("get_execution_playbook truncates", async () => {
   mockClient("getText", () => "x".repeat(shaping.MAX_PLAYBOOK_CHARS + 10));
-  const result = await tools.getExecutionPlaybook({ execution_id: 4 });
+  const result = await tools.getExecutionPlaybook({ execution_id: pid(4) });
   expect(result.truncated).toBe(true);
   expect(result.yaml).toContain("truncated");
   mockClient("getText", () => "a: 1");
-  expect(await tools.getExecutionPlaybook({ execution_id: 4 })).toEqual({
-    execution_id: 4,
+  expect(await tools.getExecutionPlaybook({ execution_id: pid(4) })).toEqual({
+    execution_id: pid(4),
     yaml: "a: 1",
     truncated: false,
   });
@@ -274,7 +275,7 @@ it("get_execution_playbook truncates", async () => {
 
 describe("update_finding_status", () => {
   it("rejects invalid status without calling the API", async () => {
-    expect((await tools.updateFindingStatus({ finding_id: 1, status: "DONE" })).error).toContain("status must be");
+    expect((await tools.updateFindingStatus({ finding_id: pid(1), status: "DONE" })).error).toContain("status must be");
   });
 
   it("sends only the status, then the comment", async () => {
@@ -287,12 +288,12 @@ describe("update_finding_status", () => {
       calls.push(["post", url, body]);
       return { id: 5 };
     });
-    const result = await tools.updateFindingStatus({ finding_id: 3, status: "tp", comment: "confirmed" });
+    const result = await tools.updateFindingStatus({ finding_id: pid(3), status: "tp", comment: "confirmed" });
     expect(calls).toEqual([
-      ["patch", "/findings/3", { status: "TP" }],
-      ["post", "/findings/3/comments", { body: "confirmed" }],
+      ["patch", `/findings/${pid(3)}`, { status: "TP" }],
+      ["post", `/findings/${pid(3)}/comments`, { body: "confirmed" }],
     ]);
-    expect(result).toEqual({ id: 3, status: "TP", comment_id: 5 });
+    expect(result).toEqual({ id: pid(3), status: "TP", comment_id: 5 });
   });
 
   it("keeps the status when the comment fails", async () => {
@@ -300,7 +301,7 @@ describe("update_finding_status", () => {
     mockClient("post", () => {
       throw new HttpStatusError(500, "nope", "http://x");
     });
-    const result = await tools.updateFindingStatus({ finding_id: 3, status: "FP", comment: "x" });
+    const result = await tools.updateFindingStatus({ finding_id: pid(3), status: "FP", comment: "x" });
     expect(result.status).toBe("FP");
     expect(result.comment_error).toBe("nope");
   });
@@ -308,19 +309,19 @@ describe("update_finding_status", () => {
 
 it("get_finding includes a capped timeline", async () => {
   mockClient("get", (url) =>
-    url.endsWith("/timeline") ? Array(100).fill({ kind: "event", type: "T", payload: {} }) : { id: 1, title: "t" },
+    url.endsWith("/timeline") ? Array(100).fill({ kind: "event", type: "T", payload: {} }) : { id: pid(1), title: "t" },
   );
-  const result = await tools.getFinding({ finding_id: 1 });
+  const result = await tools.getFinding({ finding_id: pid(1) });
   expect(result.timeline).toHaveLength(20);
   expect(result.timeline_truncated).toBe(true);
-  expect(await tools.getFinding({ finding_id: 1, include_timeline: false })).not.toHaveProperty("timeline");
+  expect(await tools.getFinding({ finding_id: pid(1), include_timeline: false })).not.toHaveProperty("timeline");
 });
 
 describe("update_finding", () => {
   it("rejects empty and invalid fields without calling the API", async () => {
-    expect((await tools.updateFinding({ finding_id: 1 })).error).toContain("at least one");
-    expect((await tools.updateFinding({ finding_id: 1, status: "DONE" })).error).toContain("status must be");
-    expect((await tools.updateFinding({ finding_id: 1, severity: 9 })).error).toContain("severity");
+    expect((await tools.updateFinding({ finding_id: pid(1) })).error).toContain("at least one");
+    expect((await tools.updateFinding({ finding_id: pid(1), status: "DONE" })).error).toContain("status must be");
+    expect((await tools.updateFinding({ finding_id: pid(1), severity: 9 })).error).toContain("severity");
   });
 
   it("patches only provided fields and clears with null", async () => {
@@ -328,37 +329,37 @@ describe("update_finding", () => {
     mockClient("patch", (url, body) => {
       seen.push([url, body]);
       return {
-        id: 3,
+        id: pid(3),
         title: "t",
         status: body.status ?? "OPEN",
         severity: body.severity === undefined ? 2 : body.severity,
         assignee_id: body.assignee_id === undefined ? 7 : body.assignee_id,
-        execution_id: 9,
+        execution_id: pid(9),
       };
     });
 
-    const updated = await tools.updateFinding({ finding_id: 3, severity: 1, assignee_id: 42 });
-    expect(seen).toEqual([["/findings/3", { severity: 1, assignee_id: 42 }]]);
-    expect(updated).toMatchObject({ id: 3, severity: 1, assignee_id: 42 });
+    const updated = await tools.updateFinding({ finding_id: pid(3), severity: 1, assignee_id: 42 });
+    expect(seen).toEqual([[`/findings/${pid(3)}`, { severity: 1, assignee_id: 42 }]]);
+    expect(updated).toMatchObject({ id: pid(3), severity: 1, assignee_id: 42 });
 
     seen.length = 0;
-    await tools.updateFinding({ finding_id: 3, severity: null, assignee_id: null, status: "tp" });
-    expect(seen).toEqual([["/findings/3", { status: "TP", severity: null, assignee_id: null }]]);
+    await tools.updateFinding({ finding_id: pid(3), severity: null, assignee_id: null, status: "tp" });
+    expect(seen).toEqual([[`/findings/${pid(3)}`, { status: "TP", severity: null, assignee_id: null }]]);
   });
 });
 
 describe("list_finding_events", () => {
   it("requires a valid order and pages events", async () => {
-    expect((await tools.listFindingEvents({ execution_id: 1, order: "up" })).error).toContain("order");
+    expect((await tools.listFindingEvents({ execution_id: pid(1), order: "up" })).error).toContain("order");
 
     const get = mockClient("get", () => ({
       total: 2,
       items: [
-        { kind: "event", id: 1, finding_id: 3, type: "CREATED", payload: {}, created_at: "a" },
+        { kind: "event", id: 1, finding_id: pid(3), type: "CREATED", payload: {}, created_at: "a" },
         {
           kind: "event",
           id: 2,
-          finding_id: 3,
+          finding_id: pid(3),
           type: "STATUS_CHANGED",
           payload: { from: "OPEN", to: "TP" },
           created_at: "b",
@@ -366,19 +367,19 @@ describe("list_finding_events", () => {
         },
       ],
     }));
-    const result = await tools.listFindingEvents({ execution_id: 9, quantity: 10, page: 1, order: "asc" });
+    const result = await tools.listFindingEvents({ execution_id: pid(9), quantity: 10, page: 1, order: "asc" });
     expect(get).toHaveBeenCalledWith("/findings/events", {
-      execution_id: 9,
+      execution_id: pid(9),
       quantity: 10,
       page: 1,
       order: "ASC",
     });
     expect(result.items).toEqual([
-      { kind: "event", id: 1, finding_id: 3, type: "CREATED", payload: {}, created_at: "a" },
+      { kind: "event", id: 1, finding_id: pid(3), type: "CREATED", payload: {}, created_at: "a" },
       {
         kind: "event",
         id: 2,
-        finding_id: 3,
+        finding_id: pid(3),
         type: "STATUS_CHANGED",
         payload: { from: "OPEN", to: "TP" },
         created_at: "b",
@@ -391,28 +392,28 @@ describe("list_finding_events", () => {
 
 describe("edit_finding_comment", () => {
   it("rejects empty body and patches otherwise", async () => {
-    expect((await tools.editFindingComment({ finding_id: 1, comment_id: 2, body: "  " })).error).toContain(
+    expect((await tools.editFindingComment({ finding_id: pid(1), comment_id: 2, body: "  " })).error).toContain(
       "non-empty",
     );
 
     const patch = mockClient("patch", () => ({ id: 2, edited_at: "2026-01-01T00:00:00Z" }));
-    expect(await tools.editFindingComment({ finding_id: 1, comment_id: 2, body: "fixed" })).toEqual({
-      finding_id: 1,
+    expect(await tools.editFindingComment({ finding_id: pid(1), comment_id: 2, body: "fixed" })).toEqual({
+      finding_id: pid(1),
       comment_id: 2,
       edited_at: "2026-01-01T00:00:00Z",
     });
-    expect(patch).toHaveBeenCalledWith("/findings/1/comments/2", { body: "fixed" });
+    expect(patch).toHaveBeenCalledWith(`/findings/${pid(1)}/comments/2`, { body: "fixed" });
   });
 });
 
 it("delete_finding_comment soft-deletes", async () => {
   const del = mockClient("delete", () => undefined);
-  expect(await tools.deleteFindingComment({ finding_id: 1, comment_id: 2 })).toEqual({
-    finding_id: 1,
+  expect(await tools.deleteFindingComment({ finding_id: pid(1), comment_id: 2 })).toEqual({
+    finding_id: pid(1),
     comment_id: 2,
     deleted: true,
   });
-  expect(del).toHaveBeenCalledWith("/findings/1/comments/2");
+  expect(del).toHaveBeenCalledWith(`/findings/${pid(1)}/comments/2`);
 });
 
 it("delete_security_advisory returns warning when present", async () => {
@@ -420,17 +421,17 @@ it("delete_security_advisory returns warning when present", async () => {
     "request",
     () => new Response(JSON.stringify({ warning: "github failed" }), { status: 200 }),
   );
-  const result = await tools.deleteSecurityAdvisory({ finding_id: 9 });
+  const result = await tools.deleteSecurityAdvisory({ finding_id: pid(9) });
   expect(request).toHaveBeenCalledWith("DELETE", "/external_issues/security_advisory", {
-    json: { finding_id: 9 },
+    json: { finding_id: pid(9) },
   });
-  expect(result).toMatchObject({ finding_id: 9, deleted: true, warning: "github failed" });
+  expect(result).toMatchObject({ finding_id: pid(9), deleted: true, warning: "github failed" });
 });
 
 describe("AI analysis", () => {
   const pending = {
     id: 10,
-    finding_id: 3,
+    finding_id: pid(3),
     model: "m",
     status: "PENDING",
     summary: null,
@@ -453,10 +454,10 @@ describe("AI analysis", () => {
 
   it("get_finding_ai_analysis shapes the latest row", async () => {
     mockClient("get", (url) => {
-      expect(url).toBe("/findings/3/ai-analysis");
+      expect(url).toBe(`/findings/${pid(3)}/ai-analysis`);
       return completed;
     });
-    const result = await tools.getFindingAiAnalysis({ finding_id: 3 });
+    const result = await tools.getFindingAiAnalysis({ finding_id: pid(3) });
     expect(result).toMatchObject({ id: 10, status: "COMPLETED", suggested_status: "TP" });
     expect(result.hint).toContain("advisory");
   });
@@ -465,7 +466,7 @@ describe("AI analysis", () => {
     mockClient("get", () => {
       throw new HttpStatusError(404, "no analysis", "http://x");
     });
-    const result = await tools.getFindingAiAnalysis({ finding_id: 3 });
+    const result = await tools.getFindingAiAnalysis({ finding_id: pid(3) });
     expect(result).toMatchObject({ status: 404, hint: expect.stringContaining("analyze_finding") });
   });
 
@@ -473,7 +474,7 @@ describe("AI analysis", () => {
     let gets = 0;
     const request = mockClient("request", (method, path, options) => {
       expect(method).toBe("POST");
-      expect(path).toBe("/findings/3/ai-analysis");
+      expect(path).toBe(`/findings/${pid(3)}/ai-analysis`);
       expect(options?.params).toEqual({ force: true });
       return { json: async () => pending };
     });
@@ -486,7 +487,7 @@ describe("AI analysis", () => {
       .mockReturnValueOnce(0)
       .mockReturnValue(10_000);
 
-    const result = await tools.analyzeFinding({ finding_id: 3, force: true, wait: true });
+    const result = await tools.analyzeFinding({ finding_id: pid(3), force: true, wait: true });
     expect(request).toHaveBeenCalled();
     expect(gets).toBeGreaterThanOrEqual(1);
     expect(result).toMatchObject({ status: "COMPLETED", suggested_status: "TP" });
@@ -498,30 +499,30 @@ describe("AI analysis", () => {
     mockClient("get", () => pending);
     vi.spyOn(tools.deps, "now").mockReturnValue(0);
 
-    const result = await tools.analyzeFinding({ finding_id: 3, wait: true, wait_seconds: 0 });
+    const result = await tools.analyzeFinding({ finding_id: pid(3), wait: true, wait_seconds: 0 });
     expect(result.status).toBe("PENDING");
     expect(result.hint).toContain("Still PENDING");
   });
 
   it("analyze_execution posts body, validates finding_ids, returns skipped/omitted", async () => {
-    expect((await tools.analyzeExecution({ execution_id: 1, finding_ids: [] })).error).toContain("non-empty");
+    expect((await tools.analyzeExecution({ execution_id: pid(1), finding_ids: [] })).error).toContain("non-empty");
     expect(
-      (await tools.analyzeExecution({ execution_id: 1, finding_ids: Array.from({ length: 21 }, (_, i) => i) })).error,
+      (await tools.analyzeExecution({ execution_id: pid(1), finding_ids: Array.from({ length: 21 }, (_, i) => pid(i)) })).error,
     ).toContain("At most 20");
 
     const post = mockClient("post", (url, body) => {
       expect(url).toBe("/findings/ai-analysis");
-      expect(body).toEqual({ execution_id: 5, force: false, finding_ids: [1, 2] });
-      return { items: [completed], skipped: [9], omitted: [8] };
+      expect(body).toEqual({ execution_id: pid(5), force: false, finding_ids: [pid(1), pid(2)] });
+      return { items: [completed], skipped: [pid(9)], omitted: [pid(8)] };
     });
     const result = await tools.analyzeExecution({
-      execution_id: 5,
-      finding_ids: [1, 2],
+      execution_id: pid(5),
+      finding_ids: [pid(1), pid(2)],
       wait: false,
     });
     expect(post).toHaveBeenCalled();
-    expect(result.skipped).toEqual([9]);
-    expect(result.omitted).toEqual([8]);
+    expect(result.skipped).toEqual([pid(9)]);
+    expect(result.omitted).toEqual([pid(8)]);
     expect(result.items).toHaveLength(1);
     expect(result.items[0].status).toBe("COMPLETED");
     expect(result.hint).toContain("advisory");
@@ -532,7 +533,7 @@ describe("AI analysis", () => {
     let gets = 0;
     mockClient("get", (url, params) => {
       expect(url).toBe("/findings/ai-analyses");
-      expect(params).toMatchObject({ execution_id: 5 });
+      expect(params).toMatchObject({ execution_id: pid(5) });
       gets += 1;
       return { total: 1, items: [gets === 1 ? pending : { ...completed, id: 10 }] };
     });
@@ -541,7 +542,7 @@ describe("AI analysis", () => {
       .mockReturnValueOnce(0)
       .mockReturnValue(10_000);
 
-    const result = await tools.analyzeExecution({ execution_id: 5, wait: true });
+    const result = await tools.analyzeExecution({ execution_id: pid(5), wait: true });
     expect(result.items[0].status).toBe("COMPLETED");
     expect(tools.deps.sleep).toHaveBeenCalled();
   });
@@ -549,13 +550,13 @@ describe("AI analysis", () => {
 
 it("get_finding_timeline shapes history", async () => {
   mockClient("get", (url) => {
-    expect(url).toBe("/findings/7/timeline");
+    expect(url).toBe(`/findings/${pid(7)}/timeline`);
     return [
       { kind: "comment", body: "hi", created_at: "t1", display_name: "a" },
       { kind: "event", type: "STATUS", payload: { to: "TP" } },
     ];
   });
-  const result = await tools.getFindingTimeline({ finding_id: 7 });
+  const result = await tools.getFindingTimeline({ finding_id: pid(7) });
   expect(result.timeline_total).toBe(2);
   expect(result.timeline_truncated).toBe(false);
   expect(result.timeline[0]).toMatchObject({ kind: "comment", body: "hi", by: "a" });
@@ -569,18 +570,18 @@ describe("add_finding_comment", () => {
       Object.assign(seen, { url, body });
       return { id: 42 };
     });
-    expect(await tools.addFindingComment({ finding_id: 3, body: "looks real" })).toEqual({
-      finding_id: 3,
+    expect(await tools.addFindingComment({ finding_id: pid(3), body: "looks real" })).toEqual({
+      finding_id: pid(3),
       comment_id: 42,
     });
-    expect(seen).toEqual({ url: "/findings/3/comments", body: { body: "looks real" } });
+    expect(seen).toEqual({ url: `/findings/${pid(3)}/comments`, body: { body: "looks real" } });
   });
 
   it("rejects empty and overlong comments", async () => {
-    expect((await tools.addFindingComment({ finding_id: 1, body: "   " })).error).toContain("non-empty");
-    expect((await tools.addFindingComment({ finding_id: 1, body: "" })).error).toContain("non-empty");
+    expect((await tools.addFindingComment({ finding_id: pid(1), body: "   " })).error).toContain("non-empty");
+    expect((await tools.addFindingComment({ finding_id: pid(1), body: "" })).error).toContain("non-empty");
     const long = "x".repeat(shaping.MAX_COMMENT_CHARS + 1);
-    expect((await tools.addFindingComment({ finding_id: 1, body: long })).error).toContain("exceeds");
+    expect((await tools.addFindingComment({ finding_id: pid(1), body: long })).error).toContain("exceeds");
   });
 });
 
@@ -588,7 +589,7 @@ it("list_jobs caps quantity and validates type", async () => {
   const seen: any = {};
   mockClient("get", (_url, params) => {
     Object.assign(seen, params);
-    return { total: 100, items: [{ id: 1, type: "RUN" }] };
+    return { total: 100, items: [{ id: pid(1), type: "RUN" }] };
   });
   const result = await tools.listJobs({ type: "RUN", visibility: "public", quantity: 500 });
   expect(seen).toMatchObject({ quantity: 25, type: "RUN", visibility: "PUBLIC" });
@@ -599,11 +600,11 @@ it("list_jobs caps quantity and validates type", async () => {
 
 it("get_job combines the job and its recent executions", async () => {
   mockClient("get", (url) =>
-    url === "/executions" ? { items: [{ id: 9, status: "FINISHED" }] } : { id: 4, type: "SCAN", status: "FINISHED" },
+    url === "/executions" ? { items: [{ id: pid(9), status: "FINISHED" }] } : { id: pid(4), type: "SCAN", status: "FINISHED" },
   );
-  const result = await tools.getJob({ job_id: 4 });
+  const result = await tools.getJob({ job_id: pid(4) });
   expect(result.type).toBe("SCAN");
-  expect(result.executions[0].id).toBe(9);
+  expect(result.executions[0].id).toBe(pid(9));
 });
 
 describe("scan_repository", () => {
@@ -619,25 +620,25 @@ describe("scan_repository", () => {
     const seen: any = {};
     mockClient("post", (url, body) => {
       Object.assign(seen, { url, body });
-      return { id: 3, status: "QUEUED", playbook_source: "satori://a.yml" };
+      return { id: pid(3), status: "QUEUED", playbook_source: "satori://a.yml" };
     });
     const result = await tools.scanRepository({ repository: "o/r", playbook_uri: "satori://a.yml", quantity: 99 });
     expect(seen.url).toBe("/jobs/scans");
     expect(seen.body.repository_data).toEqual({ repository: "o/r" });
     expect(seen.body.criteria).toEqual({ quantity: 10 });
     expect(seen.body.playbook_source).toBe("satori://a.yml");
-    expect(result.job_id).toBe(3);
+    expect(result.job_id).toBe(pid(3));
   });
 
   it("omits the source without a playbook", async () => {
     const seen: any = {};
     mockClient("post", (url, body) => {
       Object.assign(seen, { url, body });
-      return { id: 4, status: "QUEUED", playbook_source: "bundle://from-repo" };
+      return { id: pid(4), status: "QUEUED", playbook_source: "bundle://from-repo" };
     });
     const result = await tools.scanRepository({ repository: "o/r" });
     expect(seen.body).not.toHaveProperty("playbook_source");
-    expect(result.job_id).toBe(4);
+    expect(result.job_id).toBe(pid(4));
     expect(result.playbook_source).toBe("bundle://from-repo");
   });
 
@@ -645,7 +646,7 @@ describe("scan_repository", () => {
     const seen: any = {};
     mockClient("post", (_url, body) => {
       Object.assign(seen, body);
-      return { id: 5, status: "QUEUED" };
+      return { id: pid(5), status: "QUEUED" };
     });
     await tools.scanRepository({ repository: "octo/*", quantity: 7 });
     expect(seen.criteria).toEqual({ quantity: 1 });
@@ -655,7 +656,7 @@ describe("scan_repository", () => {
     const seen: any = {};
     mockClient("post", (_url, body) => {
       Object.assign(seen, body);
-      return { id: 6, status: "QUEUED" };
+      return { id: pid(6), status: "QUEUED" };
     });
     await tools.scanRepository({ repository: "o/r", secrets: { TOKEN: "x" } });
     expect(seen.secrets).toEqual({ TOKEN: "x" });
@@ -666,35 +667,35 @@ describe("scan lifecycle", () => {
   it("stop_scan patches CANCELED and soft-fails when terminal", async () => {
     const patches: unknown[] = [];
     let status = "FINISHED";
-    mockClient("get", () => ({ id: 8, type: "SCAN", status }));
+    mockClient("get", () => ({ id: pid(8), type: "SCAN", status }));
     mockClient("patch", (url, body) => {
       patches.push([url, body]);
       return {};
     });
-    expect(await tools.stopScan({ scan_id: 8 })).toMatchObject({ stopped: false, status: "FINISHED" });
+    expect(await tools.stopScan({ scan_id: pid(8) })).toMatchObject({ stopped: false, status: "FINISHED" });
     expect(patches).toEqual([]);
 
     status = "RUNNING";
-    expect(await tools.stopScan({ scan_id: 8 })).toMatchObject({ stopped: true, scan_id: 8 });
-    expect(patches).toEqual([["/jobs/scans/8", { status: "CANCELED" }]]);
+    expect(await tools.stopScan({ scan_id: pid(8) })).toMatchObject({ stopped: true, scan_id: pid(8) });
+    expect(patches).toEqual([[`/jobs/scans/${pid(8)}`, { status: "CANCELED" }]]);
   });
 
   it("stop_run cancels active runs, soft-fails when terminal, rejects other job types", async () => {
     const patches: unknown[] = [];
-    let job: Record<string, unknown> = { id: 8, type: "RUN", status: "FINISHED" };
+    let job: Record<string, unknown> = { id: pid(8), type: "RUN", status: "FINISHED" };
     mockClient("get", () => job);
     mockClient("request", (method, path, options) => {
       patches.push([method, path, options?.json]);
       return new Response(null);
     });
-    expect(await tools.stopRun({ run_id: 8 })).toMatchObject({ stopped: false, status: "FINISHED" });
-    job = { id: 8, type: "SCAN", status: "RUNNING" };
-    expect((await tools.stopRun({ run_id: 8 })).error).toContain("not RUN");
+    expect(await tools.stopRun({ run_id: pid(8) })).toMatchObject({ stopped: false, status: "FINISHED" });
+    job = { id: pid(8), type: "SCAN", status: "RUNNING" };
+    expect((await tools.stopRun({ run_id: pid(8) })).error).toContain("not RUN");
     expect(patches).toEqual([]);
 
-    job = { id: 8, type: "RUN", status: "WAITING_FILES" };
-    expect(await tools.stopRun({ run_id: 8 })).toMatchObject({ stopped: true, run_id: 8 });
-    expect(patches).toEqual([["PATCH", "/jobs/runs/8", { status: "CANCELED" }]]);
+    job = { id: pid(8), type: "RUN", status: "WAITING_FILES" };
+    expect(await tools.stopRun({ run_id: pid(8) })).toMatchObject({ stopped: true, run_id: pid(8) });
+    expect(patches).toEqual([["PATCH", `/jobs/runs/${pid(8)}`, { status: "CANCELED" }]]);
   });
 
   it("stop_all_runs cancels only active runs and reports failures", async () => {
@@ -703,65 +704,65 @@ describe("scan lifecycle", () => {
       expect(params).toMatchObject({ type: "RUN", quantity: tools.STOP_ALL_RUNS_WINDOW });
       return {
         items: [
-          { id: 1, status: "RUNNING" },
-          { id: 2, status: "FINISHED" },
-          { id: 3, status: "QUEUED" },
-          { id: 4, status: "CANCELED" },
+          { id: pid(1), status: "RUNNING" },
+          { id: pid(2), status: "FINISHED" },
+          { id: pid(3), status: "QUEUED" },
+          { id: pid(4), status: "CANCELED" },
         ],
       };
     });
     mockClient("request", (_method, path) => {
-      if (path === "/jobs/runs/3") throw new HttpStatusError(404, "Not Found", path);
+      if (path === `/jobs/runs/${pid(3)}`) throw new HttpStatusError(404, "Not Found", path);
       return new Response(null);
     });
     expect(await tools.stopAllRuns()).toEqual({
       checked: 4,
-      stopped: [1],
-      failed: [{ run_id: 3, error: "Not Found", status: 404 }],
+      stopped: [pid(1)],
+      failed: [{ run_id: pid(3), error: "Not Found", status: 404 }],
     });
   });
 
   it("pause_scan and resume_scan enforce status transitions", async () => {
     const patches: unknown[] = [];
     let status = "PAUSED";
-    mockClient("get", () => ({ id: 9, type: "SCAN", status }));
+    mockClient("get", () => ({ id: pid(9), type: "SCAN", status }));
     mockClient("patch", (url, body) => {
       patches.push([url, body]);
       return {};
     });
 
-    expect(await tools.pauseScan({ scan_id: 9 })).toMatchObject({ paused: false, status: "PAUSED" });
+    expect(await tools.pauseScan({ scan_id: pid(9) })).toMatchObject({ paused: false, status: "PAUSED" });
     expect(patches).toEqual([]);
 
     status = "RUNNING";
-    expect(await tools.pauseScan({ scan_id: 9 })).toMatchObject({ paused: true });
-    expect(patches).toEqual([["/jobs/scans/9", { status: "PAUSED" }]]);
+    expect(await tools.pauseScan({ scan_id: pid(9) })).toMatchObject({ paused: true });
+    expect(patches).toEqual([[`/jobs/scans/${pid(9)}`, { status: "PAUSED" }]]);
 
     patches.length = 0;
     status = "RUNNING";
-    expect(await tools.resumeScan({ scan_id: 9 })).toMatchObject({ resumed: false, status: "RUNNING" });
+    expect(await tools.resumeScan({ scan_id: pid(9) })).toMatchObject({ resumed: false, status: "RUNNING" });
     expect(patches).toEqual([]);
 
     status = "PAUSED";
-    expect(await tools.resumeScan({ scan_id: 9 })).toMatchObject({ resumed: true });
-    expect(patches).toEqual([["/jobs/scans/9", { status: "RUNNING" }]]);
+    expect(await tools.resumeScan({ scan_id: pid(9) })).toMatchObject({ resumed: true });
+    expect(patches).toEqual([[`/jobs/scans/${pid(9)}`, { status: "RUNNING" }]]);
   });
 
   it("rejects non-SCAN jobs", async () => {
-    mockClient("get", () => ({ id: 1, type: "RUN", status: "RUNNING" }));
-    expect((await tools.stopScan({ scan_id: 1 })).error).toContain("not SCAN");
-    expect((await tools.pauseScan({ scan_id: 1 })).error).toContain("not SCAN");
-    expect((await tools.cleanScan({ scan_id: 1 })).error).toContain("not SCAN");
+    mockClient("get", () => ({ id: pid(1), type: "RUN", status: "RUNNING" }));
+    expect((await tools.stopScan({ scan_id: pid(1) })).error).toContain("not SCAN");
+    expect((await tools.pauseScan({ scan_id: pid(1) })).error).toContain("not SCAN");
+    expect((await tools.cleanScan({ scan_id: pid(1) })).error).toContain("not SCAN");
   });
 
   it("clean_scan pages executions and posts delete", async () => {
     mockClient("get", (url, params) => {
-      if (url.startsWith("/jobs/")) return { id: 10, type: "SCAN", status: "FINISHED" };
+      if (url.startsWith("/jobs/")) return { id: pid(10), type: "SCAN", status: "FINISHED" };
       if (url === "/executions") {
         if (params?.page === 1) {
-          return { total: 150, items: Array.from({ length: 100 }, (_, i) => ({ id: i + 1 })) };
+          return { total: 150, items: Array.from({ length: 100 }, (_, i) => ({ id: pid(i + 1) })) };
         }
-        return { total: 150, items: Array.from({ length: 50 }, (_, i) => ({ id: i + 101 })) };
+        return { total: 150, items: Array.from({ length: 50 }, (_, i) => ({ id: pid(i + 101) })) };
       }
       throw new Error(`unexpected get ${url}`);
     });
@@ -771,10 +772,10 @@ describe("scan lifecycle", () => {
       return new Response(null, { status: 201 });
     });
 
-    const result = await tools.cleanScan({ scan_id: 10 });
-    expect(result).toMatchObject({ scan_id: 10, deleted: 150 });
+    const result = await tools.cleanScan({ scan_id: pid(10) });
+    expect(result).toMatchObject({ scan_id: pid(10), deleted: 150 });
     expect(requests).toEqual([
-      ["POST", "/executions/delete", Array.from({ length: 150 }, (_, i) => i + 1)],
+      ["POST", "/executions/delete", Array.from({ length: 150 }, (_, i) => pid(i + 1))],
     ]);
   });
 
@@ -787,23 +788,23 @@ describe("scan lifecycle", () => {
     const request = mockClient("request", () => {
       throw new Error("should not delete");
     });
-    expect(await tools.cleanScan({ scan_id: 11 })).toEqual(
-      expect.objectContaining({ scan_id: 11, deleted: 0 }),
+    expect(await tools.cleanScan({ scan_id: pid(11) })).toEqual(
+      expect.objectContaining({ scan_id: pid(11), deleted: 0 }),
     );
     expect(request).not.toHaveBeenCalled();
   });
 
   it("clean_monitor rejects non-MONITOR and deletes reports", async () => {
-    mockClient("get", () => ({ id: 12, type: "SCAN", status: "FINISHED" }));
-    expect((await tools.cleanMonitor({ monitor_id: 12 })).error).toContain("not MONITOR");
+    mockClient("get", () => ({ id: pid(12), type: "SCAN", status: "FINISHED" }));
+    expect((await tools.cleanMonitor({ monitor_id: pid(12) })).error).toContain("not MONITOR");
 
     mockClient("get", (url) => {
-      if (url.startsWith("/jobs/")) return { id: 12, type: "MONITOR", status: "RUNNING" };
-      return { total: 2, items: [{ id: 1 }, { id: 2 }] };
+      if (url.startsWith("/jobs/")) return { id: pid(12), type: "MONITOR", status: "RUNNING" };
+      return { total: 2, items: [{ id: pid(1) }, { id: pid(2) }] };
     });
     const request = mockClient("request", () => new Response(null, { status: 201 }));
-    expect(await tools.cleanMonitor({ monitor_id: 12 })).toMatchObject({ monitor_id: 12, deleted: 2 });
-    expect(request).toHaveBeenCalledWith("POST", "/executions/delete", { json: [1, 2] });
+    expect(await tools.cleanMonitor({ monitor_id: pid(12) })).toMatchObject({ monitor_id: pid(12), deleted: 2 });
+    expect(request).toHaveBeenCalledWith("POST", "/executions/delete", { json: [pid(1), pid(2)] });
   });
 });
 
@@ -821,7 +822,7 @@ describe("create_monitor", () => {
     mockClient("postForm", () => "m1");
     return mockClient("post", (url, body) => {
       expect(url).toBe("/jobs/monitors");
-      return { id: 30, type: "MONITOR", status: "RUNNING", expression: body.expression, visibility: body.visibility };
+      return { id: pid(30), type: "MONITOR", status: "RUNNING", expression: body.expression, visibility: body.visibility };
     });
   }
 
@@ -831,7 +832,7 @@ describe("create_monitor", () => {
       playbook_yaml: "settings:\n  cron: 0 3 * * *\ntest:\n  run: [echo monitor-cron]\n",
       parameters: { HOST: ["a.com"] },
     });
-    expect(result).toMatchObject({ id: 30, type: "MONITOR", expression: "cron(0 3 * * *)", visibility: "PRIVATE" });
+    expect(result).toMatchObject({ id: pid(30), type: "MONITOR", expression: "cron(0 3 * * *)", visibility: "PRIVATE" });
     expect(post.mock.calls[0][1]).toMatchObject({
       expression: "cron(0 3 * * *)",
       parameters: { HOST: ["a.com"] },
@@ -863,8 +864,8 @@ describe("create_monitor", () => {
 
   it("run_playbook points a scheduled playbook at create_monitor", async () => {
     mockClient("postForm", () => "b9");
-    mockClient("post", () => ({ id: 7, status: "QUEUED" }));
-    mockClient("get", () => ({ items: [{ id: 99 }] }));
+    mockClient("post", () => ({ id: pid(7), status: "QUEUED" }));
+    mockClient("get", () => ({ items: [{ id: pid(99) }] }));
     const result = await tools.runPlaybook({
       playbook_yaml: "settings:\n  rate: 1 day\ntest:\n  run: [echo run-once]\n",
       wait: false,
@@ -986,20 +987,20 @@ it("list_advisories validates and omits long text", async () => {
   const seen: any = {};
   mockClient("get", (url, params) => {
     Object.assign(seen, { url, ...params });
-    return { total: 1, items: [{ id: 1, kind: "ISSUE", title: "t", description: "d".repeat(9999) }] };
+    return { total: 1, items: [{ id: pid(1), kind: "ISSUE", title: "t", description: "d".repeat(9999) }] };
   });
   const result = await tools.listAdvisories({
     kind: "issue",
-    execution_id: 5,
-    finding_id: 9,
+    execution_id: pid(5),
+    finding_id: pid(9),
     quantity: 99,
   });
   expect(seen).toMatchObject({
     url: "/external_issues",
     kind: "ISSUE",
     quantity: 25,
-    execution_id: 5,
-    finding_id: 9,
+    execution_id: pid(5),
+    finding_id: pid(9),
   });
   expect(result.items[0]).not.toHaveProperty("description");
   expect((await tools.listAdvisories({ kind: "PR" })).error).toContain("kind must be");
@@ -1007,14 +1008,14 @@ it("list_advisories validates and omits long text", async () => {
 
 describe("security advisories", () => {
   const draft = {
-    id: 42,
+    id: pid(42),
     kind: "SECURITY_ADVISORY",
     provider: "GITHUB",
     title: "CVE-ish",
     description: "d".repeat(100),
     severity: 2,
-    finding_id: 7,
-    execution_id: 3,
+    finding_id: pid(7),
+    execution_id: pid(3),
     external_id: null,
     external_url: null,
     visibility: "UNLISTED",
@@ -1023,14 +1024,14 @@ describe("security advisories", () => {
 
   it("get_advisory returns clipped detail and advisory_url", async () => {
     mockClient("get", (url) => {
-      expect(url).toBe("/external_issues/42");
+      expect(url).toBe(`/external_issues/${pid(42)}`);
       return { ...draft, description: "z".repeat(10_000) };
     });
-    const result = await tools.getAdvisory({ advisory_id: 42 });
-    expect(result.advisory_url).toContain("/advisories/42");
+    const result = await tools.getAdvisory({ advisory_id: pid(42) });
+    expect(result.advisory_url).toContain(`/advisories/${pid(42)}`);
     expect(result.description.length).toBeLessThan(shaping.MAX_ADVISORY_DESCRIPTION_CHARS + 100);
     expect(result.vulnerabilities).toBeDefined();
-    const full = await tools.getAdvisory({ advisory_id: 42, full_description: true });
+    const full = await tools.getAdvisory({ advisory_id: pid(42), full_description: true });
     expect(full.description).toBe("z".repeat(10_000));
   });
 
@@ -1040,19 +1041,19 @@ describe("security advisories", () => {
       patches.push([method, path, options?.json]);
       return new Response(null);
     });
-    expect((await tools.updateAdvisory({ advisory_id: 42 })).error).toBe("Pass title and/or description.");
+    expect((await tools.updateAdvisory({ advisory_id: pid(42) })).error).toBe("Pass title and/or description.");
     expect(patches).toEqual([]);
 
-    expect(await tools.updateAdvisory({ advisory_id: 42, title: "Plain title" })).toMatchObject({
-      id: 42,
+    expect(await tools.updateAdvisory({ advisory_id: pid(42), title: "Plain title" })).toMatchObject({
+      id: pid(42),
       updated: ["title"],
     });
-    expect(await tools.updateAdvisory({ advisory_id: 42, title: "T", description: "Body" })).toMatchObject({
+    expect(await tools.updateAdvisory({ advisory_id: pid(42), title: "T", description: "Body" })).toMatchObject({
       updated: ["title", "description"],
     });
     expect(patches).toEqual([
-      ["PATCH", "/external_issues/42", { title: "Plain title" }],
-      ["PATCH", "/external_issues/42", { title: "T", description: "Body" }],
+      ["PATCH", `/external_issues/${pid(42)}`, { title: "Plain title" }],
+      ["PATCH", `/external_issues/${pid(42)}`, { title: "T", description: "Body" }],
     ]);
   });
 
@@ -1060,7 +1061,7 @@ describe("security advisories", () => {
     mockClient("request", (_method, path) => {
       throw new HttpStatusError(409, "A published advisory cannot be edited; edit it on GitHub instead", path);
     });
-    const result = await tools.updateAdvisory({ advisory_id: 42, title: "T" });
+    const result = await tools.updateAdvisory({ advisory_id: pid(42), title: "T" });
     expect(result.status).toBe(409);
     expect(result.hint).toContain("edit it there");
   });
@@ -1068,12 +1069,12 @@ describe("security advisories", () => {
   it("create_security_advisory posts a draft", async () => {
     const post = mockClient("post", (url, body) => {
       expect(url).toBe("/external_issues/security_advisory");
-      expect(body).toEqual({ finding_id: 7, visibility: "PRIVATE" });
+      expect(body).toEqual({ finding_id: pid(7), visibility: "PRIVATE" });
       return draft;
     });
-    const result = await tools.createSecurityAdvisory({ finding_id: 7, visibility: "private" });
+    const result = await tools.createSecurityAdvisory({ finding_id: pid(7), visibility: "private" });
     expect(post).toHaveBeenCalled();
-    expect(result).toMatchObject({ id: 42, finding_id: 7 });
+    expect(result).toMatchObject({ id: pid(42), finding_id: pid(7) });
     expect(result.hint).toContain("publish_security_advisory");
   });
 
@@ -1083,11 +1084,11 @@ describe("security advisories", () => {
     });
     mockClient("get", (url, params) => {
       expect(url).toBe("/external_issues");
-      expect(params).toMatchObject({ finding_id: 7, kind: "SECURITY_ADVISORY" });
+      expect(params).toMatchObject({ finding_id: pid(7), kind: "SECURITY_ADVISORY" });
       return { total: 1, items: [{ ...draft, external_id: "GHSA-x" }] };
     });
-    const result = await tools.createSecurityAdvisory({ finding_id: 7 });
-    expect(result.id).toBe(42);
+    const result = await tools.createSecurityAdvisory({ finding_id: pid(7) });
+    expect(result.id).toBe(pid(42));
     expect(result.hint).toContain("already exists");
     expect(result).not.toHaveProperty("status");
   });
@@ -1097,7 +1098,7 @@ describe("security advisories", () => {
       throw new HttpStatusError(409, "already exists", "http://x");
     });
     mockClient("get", () => ({ total: 0, items: [] }));
-    const result = await tools.createSecurityAdvisory({ finding_id: 7 });
+    const result = await tools.createSecurityAdvisory({ finding_id: pid(7) });
     expect(result).toMatchObject({ status: 409, error: expect.stringContaining("already exists") });
     expect(result.hint).toBeUndefined();
   });
@@ -1106,7 +1107,7 @@ describe("security advisories", () => {
     const request = mockClient("request", (method, path, options) => {
       expect(method).toBe("POST");
       expect(path).toBe("/external_issues/security_advisory/publish");
-      expect(options?.json).toEqual({ finding_id: 7 });
+      expect(options?.json).toEqual({ finding_id: pid(7) });
       expect(options?.timeoutMs).toBe(tools.PUBLISH_ADVISORY_TIMEOUT_MS);
       return {
         json: async () => ({
@@ -1116,7 +1117,7 @@ describe("security advisories", () => {
         }),
       };
     });
-    const result = await tools.publishSecurityAdvisory({ finding_id: 7 });
+    const result = await tools.publishSecurityAdvisory({ finding_id: pid(7) });
     expect(request).toHaveBeenCalled();
     expect(result.external_url).toContain("GHSA-1");
     expect(result.hint).toContain("Published");
@@ -1126,34 +1127,34 @@ describe("security advisories", () => {
     mockClient("request", () => {
       throw new HttpStatusError(409, "already published", "http://x");
     });
-    const result = await tools.publishSecurityAdvisory({ finding_id: 7 });
+    const result = await tools.publishSecurityAdvisory({ finding_id: pid(7) });
     expect(result.status).toBe(409);
     expect(result.hint).toBe(tools.PUBLISH_ADVISORY_409_HINT);
   });
 
   it("get_advisory_status returns remote status", async () => {
     mockClient("get", (url) => {
-      expect(url).toBe("/external_issues/42/status");
+      expect(url).toBe(`/external_issues/${pid(42)}/status`);
       return { status: "triage" };
     });
-    expect(await tools.getAdvisoryStatus({ advisory_id: 42 })).toEqual({
-      advisory_id: 42,
+    expect(await tools.getAdvisoryStatus({ advisory_id: pid(42) })).toEqual({
+      advisory_id: pid(42),
       status: "triage",
     });
   });
 
   it("update_advisory_visibility validates and patches", async () => {
-    expect((await tools.updateAdvisoryVisibility({ advisory_id: 1, visibility: "secret" })).error).toContain(
+    expect((await tools.updateAdvisoryVisibility({ advisory_id: pid(1), visibility: "secret" })).error).toContain(
       "visibility must be",
     );
     const request = mockClient("request", (method, path, options) => {
       expect(method).toBe("PATCH");
-      expect(path).toBe("/external_issues/42");
+      expect(path).toBe(`/external_issues/${pid(42)}`);
       expect(options?.json).toEqual({ visibility: "PUBLIC" });
       return { ok: true };
     });
-    expect(await tools.updateAdvisoryVisibility({ advisory_id: 42, visibility: "public" })).toEqual({
-      id: 42,
+    expect(await tools.updateAdvisoryVisibility({ advisory_id: pid(42), visibility: "public" })).toEqual({
+      id: pid(42),
       visibility: "PUBLIC",
     });
     expect(request).toHaveBeenCalled();
@@ -1164,7 +1165,7 @@ it("list_monitors and list_scans filter by job type", async () => {
   const seen: any = {};
   mockClient("get", (_url, params) => {
     Object.assign(seen, params);
-    return { total: 1, items: [{ id: 1, type: "MONITOR", expression: "rate(1 hours)" }] };
+    return { total: 1, items: [{ id: pid(1), type: "MONITOR", expression: "rate(1 hours)" }] };
   });
   const result = await tools.listMonitors({ visibility: "private" });
   expect(seen).toMatchObject({ type: "MONITOR", visibility: "PRIVATE" });
@@ -1354,14 +1355,14 @@ describe("run_local", () => {
     const write = vi.spyOn(process.stdout, "write");
     const runLocalJob = vi
       .spyOn(tools.deps, "runLocalJob")
-      .mockResolvedValue({ job: { id: 5 }, executionId: 77, report: { total_fails: 0 }, timedOut: false });
+      .mockResolvedValue({ job: { id: pid(5) }, executionId: pid(77), report: { total_fails: 0 }, timedOut: false });
     mockClient("postForm", () => "b1");
-    mockClient("get", () => ({ id: 77, status: "FINISHED", report: { total_fails: 0 } }));
+    mockClient("get", () => ({ id: pid(77), status: "FINISHED", report: { total_fails: 0 } }));
 
     const result = await tools.runLocal({ playbook_yaml: "cmd: [echo hi]\n", directory: tmp, run: ["a"] });
-    expect(result.execution_id).toBe(77);
-    expect(result.job_id).toBe(5);
-    expect(result.execution.id).toBe(77);
+    expect(result.execution_id).toBe(pid(77));
+    expect(result.job_id).toBe(pid(5));
+    expect(result.execution.id).toBe(pid(77));
     expect(result.report_url).toBeTruthy();
     expect(result.hint).toContain("get_execution_output");
     expect(runLocalJob.mock.calls[0][0]).toBe("bundle://b1");
@@ -1513,10 +1514,10 @@ describe("stop_ssh_session", () => {
 describe("ssh_into_execution", () => {
   it("returns short-lived credentials", async () => {
     mockClient("get", (url) => {
-      expect(url).toBe("/executions/8/ssh");
+      expect(url).toBe(`/executions/${pid(8)}/ssh`);
       return { host: "1.2.3.4", token: "jwt" };
     });
-    expect(await tools.sshIntoExecution({ execution_id: 8 })).toMatchObject({
+    expect(await tools.sshIntoExecution({ execution_id: pid(8) })).toMatchObject({
       host: "1.2.3.4",
       username: "root",
       password: "jwt",
@@ -1527,6 +1528,6 @@ describe("ssh_into_execution", () => {
     mockClient("get", () => {
       throw new HttpStatusError(503, "Execution not running", "http://x");
     });
-    expect(await tools.sshIntoExecution({ execution_id: 8 })).toEqual({ error: "Execution not running", status: 503 });
+    expect(await tools.sshIntoExecution({ execution_id: pid(8) })).toEqual({ error: "Execution not running", status: 503 });
   });
 });

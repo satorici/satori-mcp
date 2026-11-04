@@ -12,10 +12,10 @@ export const DASHBOARD_URL = process.env.SATORI_DASHBOARD_URL ?? "https://dashbo
 
 export const DOCS_URL = (process.env.SATORI_DOCS_URL ?? "https://docs-v2.satori.ci").replace(/\/+$/, "");
 
-export function reportUrl(executionId: number): string {
+export function reportUrl(executionId: string): string {
   return `${DASHBOARD_URL}/reports/${executionId}`;
 }
 
-export function advisoryUrl(advisoryId: number): string {
+export function advisoryUrl(advisoryId: string): string {
   return `${DASHBOARD_URL}/advisories/${advisoryId}`;
 }

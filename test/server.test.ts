@@ -127,3 +127,77 @@ it("renders the prompt", async () => {
   const message = prompt.messages[0].content as { type: string; text: string };
   expect(message.text.startsWith("Goal: scan\n\n1.")).toBe(true);
 });
+
+const PUBLIC_ID_PARAMS: Record<string, string[]> = {
+  get_execution: ["execution_id"],
+  list_executions: ["job_id", "id_gt", "id_lt"],
+  list_reports: ["job_id", "id_gt", "id_lt"],
+  stop_execution: ["execution_id"],
+  update_execution_visibility: ["execution_id"],
+  delete_execution: ["execution_id"],
+  delete_executions: ["execution_ids[]"],
+  get_execution_playbook: ["execution_id"],
+  get_execution_output: ["execution_id"],
+  list_findings: ["execution_id"],
+  get_finding: ["finding_id"],
+  get_finding_timeline: ["finding_id"],
+  update_finding_status: ["finding_id"],
+  update_finding: ["finding_id"],
+  list_finding_events: ["execution_id"],
+  add_finding_comment: ["finding_id"],
+  edit_finding_comment: ["finding_id"],
+  delete_finding_comment: ["finding_id"],
+  get_finding_ai_analysis: ["finding_id"],
+  analyze_finding: ["finding_id"],
+  analyze_execution: ["execution_id", "finding_ids[]"],
+  get_job: ["job_id"],
+  delete_job: ["job_id"],
+  stop_scan: ["scan_id"],
+  stop_run: ["run_id"],
+  pause_scan: ["scan_id"],
+  resume_scan: ["scan_id"],
+  clean_scan: ["scan_id"],
+  clean_monitor: ["monitor_id"],
+  list_advisories: ["execution_id", "finding_id"],
+  get_advisory: ["advisory_id"],
+  create_security_advisory: ["finding_id"],
+  publish_security_advisory: ["finding_id"],
+  get_advisory_status: ["advisory_id"],
+  update_advisory_visibility: ["advisory_id"],
+  update_advisory: ["advisory_id"],
+  delete_security_advisory: ["finding_id"],
+  ssh_into_execution: ["execution_id"],
+};
+
+it("types job, execution, finding and advisory IDs as 21-char public IDs", async () => {
+  const { tools: listed } = await client.listTools();
+  for (const [name, params] of Object.entries(PUBLIC_ID_PARAMS)) {
+    const props = listed.find((t) => t.name === name)!.inputSchema.properties as Record<string, any>;
+    for (const param of params) {
+      const isArray = param.endsWith("[]");
+      let schema = props[param.replace("[]", "")];
+      if (schema.anyOf) schema = schema.anyOf.find((s: any) => s.type !== "null");
+      if (isArray) schema = schema.items;
+      expect(schema, `${name}.${param}`).toMatchObject({
+        type: "string",
+        pattern: "^[0-9A-Za-z]{21}$",
+        description: "ID de 21 caracteres alfanuméricos",
+      });
+    }
+  }
+  const comment = listed.find((t) => t.name === "delete_finding_comment")!.inputSchema.properties as any;
+  expect(comment.comment_id.type).toBe("integer");
+});
+
+it("rejects integer and malformed public IDs before calling the API", async () => {
+  const get = vi.spyOn(api, "get").mockResolvedValue({ id: "V1StGXR8Z5jdHi6BmyT7k", status: "FINISHED" });
+  for (const execution_id of [42, "42", "V1StGXR8Z5jdHi6BmyT7-", "V1StGXR8Z5jdHi6BmyT7kX"]) {
+    const result = await client.callTool({ name: "get_execution", arguments: { execution_id } });
+    expect(result.isError, String(execution_id)).toBe(true);
+  }
+  expect(get).not.toHaveBeenCalled();
+
+  const ok = await client.callTool({ name: "get_execution", arguments: { execution_id: "V1StGXR8Z5jdHi6BmyT7k" } });
+  expect(ok.isError).toBeFalsy();
+  expect(get).toHaveBeenCalledWith("/executions/V1StGXR8Z5jdHi6BmyT7k");
+});

@@ -7,7 +7,7 @@ import { processCommands, TimedOut } from "./runner.js";
 
 export interface LocalRunResult {
   job: Record<string, any>;
-  executionId: number | null;
+  executionId: string | null;
   report: Record<string, any> | null;
   timedOut: boolean;
 }
@@ -68,7 +68,7 @@ export async function runLocalJob(playbookSource: string, options: LocalRunOptio
   form.append("file", new Blob(results as Uint8Array<ArrayBuffer>[]), "upload");
   await raiseForStatus(await fetch(upload.url, { method: "POST", body: form }));
 
-  let executionId: number | null = null;
+  let executionId: string | null = null;
   let report: Record<string, any> | null = null;
   // The execution (and its report) are created by the backend after the results upload,
   // so poll instead of querying once.
@@ -76,7 +76,7 @@ export async function runLocalJob(playbookSource: string, options: LocalRunOptio
   for (let i = 0; i < attempts; i++) {
     const { items } = await client.get("/executions", { job_id: localJob.id, quantity: 1 });
     if (items.length) {
-      executionId = items[0].id as number;
+      executionId = items[0].id as string;
       if (options.needsReport === false) break;
       const execution = await client.get(`/executions/${executionId}`);
       report = execution.report || null;

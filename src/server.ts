@@ -56,6 +56,13 @@ export const INSTRUCTIONS =
 const int = () => z.number().int();
 const optStr = () => z.string().nullish();
 const optInt = () => int().nullish();
+// Jobs, executions, findings and advisories: opaque public IDs (rest-api PUBLIC_IDS.md).
+const publicId = () =>
+  z
+    .string()
+    .regex(/^[0-9A-Za-z]{21}$/)
+    .describe("ID de 21 caracteres alfanuméricos");
+const optPublicId = () => publicId().nullish();
 const parameters = () => z.record(z.string(), z.array(z.string())).nullish();
 const secrets = () => z.record(z.string(), z.string()).nullish();
 const playbookSource = {
@@ -66,7 +73,7 @@ const playbookSource = {
 const paging = (quantity = 25) => ({ quantity: int().default(quantity), page: int().default(1) });
 
 const listExecutionsShape = {
-  job_id: optInt(),
+  job_id: optPublicId(),
   status: z.array(z.string()).nullish(),
   report_status: optStr(),
   job_type: optStr(),
@@ -77,8 +84,8 @@ const listExecutionsShape = {
   severity: optInt(),
   playbook: optStr(),
   tags: z.array(z.string()).nullish(),
-  id_gt: optInt(),
-  id_lt: optInt(),
+  id_gt: optPublicId(),
+  id_lt: optPublicId(),
   global_: z.boolean().default(false),
   order: optStr(),
   ...paging(),
@@ -90,7 +97,7 @@ In Satori, reports = executions. Use list_executions (or list_reports) to list r
 status: any of QUEUED, RUNNING, FINISHED, CANCELED. report_status: PASS or FAIL.
 job_type: RUN, SCAN, MONITOR, GITHUB or LOCAL. from_/to: ISO datetimes (from_ < to).
 visibility: PUBLIC, PRIVATE or UNLISTED. severity: report severity 0-5 (0=Blocker, 1=Critical, 2=High, 3=Medium, 4=Low, 5=Info).
-playbook: playbook filter. tags: key:value strings. id_gt/id_lt: id range.
+playbook: playbook filter. tags: key:value strings. id_gt/id_lt: an execution ID; only executions created after/before it.
 global_: include public executions from others. order: ASC or DESC (default DESC).
 q: free-text search. Max 25 per page; use next_page to continue.`;
 
@@ -191,7 +198,7 @@ Returns the same shape as run_playbook; analyze with get_execution_output and li
   tool(
     "get_execution",
     "Status and assertion results of an execution (no logs; use get_execution_output).",
-    { execution_id: int() },
+    { execution_id: publicId() },
     (args) => tools.getExecution(args),
   );
 
@@ -207,7 +214,7 @@ Returns the same shape as run_playbook; analyze with get_execution_output and li
   tool(
     "stop_execution",
     "Cancel a RUNNING execution (e.g. after run_playbook with wait=false).",
-    { execution_id: int() },
+    { execution_id: publicId() },
     (args) => tools.stopExecution(args),
   );
 
@@ -216,7 +223,7 @@ Returns the same shape as run_playbook; analyze with get_execution_output and li
     `Change an execution/report's visibility (PUBLIC, PRIVATE or UNLISTED).
 
 Only when the user asked.`,
-    { execution_id: int(), visibility: z.string() },
+    { execution_id: publicId(), visibility: z.string() },
     (args) => tools.updateExecutionVisibility(args),
   );
 
@@ -225,7 +232,7 @@ Only when the user asked.`,
     `Permanently delete one execution/report.
 
 Only when the user asked. Soft-fails if RUNNING — stop_execution first.`,
-    { execution_id: int() },
+    { execution_id: publicId() },
     (args) => tools.deleteExecution(args),
   );
 
@@ -234,14 +241,14 @@ Only when the user asked. Soft-fails if RUNNING — stop_execution first.`,
     `Bulk-delete executions by id (max ${tools.MAX_DELETE_EXECUTIONS}).
 
 Only when the user asked. RUNNING ids in the list are skipped by the API.`,
-    { execution_ids: z.array(int()).min(1) },
+    { execution_ids: z.array(publicId()).min(1) },
     (args) => tools.deleteExecutions(args),
   );
 
   tool(
     "get_execution_playbook",
     "The playbook YAML an execution ran (capped), to debug or iterate on it.",
-    { execution_id: int() },
+    { execution_id: publicId() },
     (args) => tools.getExecutionPlaybook(args),
   );
 
@@ -254,7 +261,7 @@ With \`test\` (a test path such as "cmd.0", or "cmd.0.stderr" to pick a stream),
 returns the last \`tail_lines\` (max 500, 20k chars) lines of \`stream\`.
 Use offset_from_end (from next_offset_from_end) to page backwards.`,
     {
-      execution_id: int(),
+      execution_id: publicId(),
       test: optStr(),
       stream: z.string().default("stdout"),
       tail_lines: int().default(100),
@@ -271,7 +278,7 @@ status: OPEN, INVESTIGATING, TP, FIXED, FP, ACCEPTED.
 source: ASSERT (playbook assertion failures) or TOOL (findings parsed from tool output).
 order: ASC or DESC by creation time.`,
     {
-      execution_id: optInt(),
+      execution_id: optPublicId(),
       severity: z.array(z.union([int(), z.string()])).nullish(),
       status: optStr(),
       source: optStr(),
@@ -284,7 +291,7 @@ order: ASC or DESC by creation time.`,
   tool(
     "get_finding",
     "Details of one finding plus its recent timeline (status changes and comments).",
-    { finding_id: int(), include_timeline: z.boolean().default(true) },
+    { finding_id: publicId(), include_timeline: z.boolean().default(true) },
     (args) => tools.getFinding(args),
   );
 
@@ -293,7 +300,7 @@ order: ASC or DESC by creation time.`,
     `Status changes and comments for a finding (capped), without the finding body.
 
 Prefer this when you only need history; use get_finding for full details.`,
-    { finding_id: int() },
+    { finding_id: publicId() },
     (args) => tools.getFindingTimeline(args),
   );
 
@@ -303,7 +310,7 @@ Prefer this when you only need history; use get_finding for full details.`,
 
 status: OPEN, INVESTIGATING, TP (true positive), FIXED, FP (false positive) or ACCEPTED.
 Changes shared triage state; use only when the user asked to triage this finding.`,
-    { finding_id: int(), status: z.string(), comment: optStr() },
+    { finding_id: publicId(), status: z.string(), comment: optStr() },
     (args) => tools.updateFindingStatus(args),
   );
 
@@ -314,7 +321,7 @@ Changes shared triage state; use only when the user asked to triage this finding
 Only when the user asked. Provide at least one of status, severity (0-5, or null to clear)
 or assignee_id (null to clear). To triage and comment together, use update_finding_status.`,
     {
-      finding_id: int(),
+      finding_id: publicId(),
       status: optStr(),
       severity: optInt(),
       assignee_id: optInt(),
@@ -329,7 +336,7 @@ or assignee_id (null to clear). To triage and comment together, use update_findi
 Does not include comments — use get_finding_timeline for those. Requires execution_id.
 order: ASC or DESC. Max 25 per page.`,
     {
-      execution_id: int(),
+      execution_id: publicId(),
       order: optStr(),
       ...paging(),
     },
@@ -342,7 +349,7 @@ order: ASC or DESC. Max 25 per page.`,
 
 Use only when the user asked to comment. To triage and comment together, use
 update_finding_status with comment=... instead.`,
-    { finding_id: int(), body: z.string() },
+    { finding_id: publicId(), body: z.string() },
     (args) => tools.addFindingComment(args),
   );
 
@@ -351,7 +358,7 @@ update_finding_status with comment=... instead.`,
     `Edit one of your own comments on a finding (author-only).
 
 Only when the user asked.`,
-    { finding_id: int(), comment_id: int(), body: z.string() },
+    { finding_id: publicId(), comment_id: int(), body: z.string() },
     (args) => tools.editFindingComment(args),
   );
 
@@ -360,7 +367,7 @@ Only when the user asked.`,
     `Soft-delete one of your own comments on a finding (author-only).
 
 Only when the user asked.`,
-    { finding_id: int(), comment_id: int() },
+    { finding_id: publicId(), comment_id: int() },
     (args) => tools.deleteFindingComment(args),
   );
 
@@ -370,7 +377,7 @@ Only when the user asked.`,
 
 Uses the account's configured AI provider. 404 if none exists yet — call
 analyze_finding when the user asks to analyze. suggested_status is advisory only.`,
-    { finding_id: int() },
+    { finding_id: publicId() },
     (args) => tools.getFindingAiAnalysis(args),
   );
 
@@ -382,7 +389,7 @@ Only when the user asked to analyze. force=true queues again even if one is pend
 or completed. With wait (default true), polls until COMPLETED/FAILED or wait_seconds
 (max 600). suggested_status is advisory — do not update_finding_status unless asked.`,
     {
-      finding_id: int(),
+      finding_id: publicId(),
       force: z.boolean().default(false),
       wait: z.boolean().default(true),
       wait_seconds: int().default(tools.AI_ANALYSIS_DEFAULT_WAIT),
@@ -398,8 +405,8 @@ Only when the user asked to analyze. Optional finding_ids (max 20); otherwise th
 picks up to 20 by severity. force, wait and wait_seconds work as in analyze_finding.
 Returns items, skipped and omitted. suggested_status is advisory only.`,
     {
-      execution_id: int(),
-      finding_ids: z.array(int()).nullish(),
+      execution_id: publicId(),
+      finding_ids: z.array(publicId()).nullish(),
       force: z.boolean().default(false),
       wait: z.boolean().default(true),
       wait_seconds: int().default(tools.AI_ANALYSIS_DEFAULT_WAIT),
@@ -420,7 +427,7 @@ Max 25 per page; use next_page to continue.`,
   tool(
     "get_job",
     "A job and its 5 most recent executions (no playbook body; see get_execution_playbook).",
-    { job_id: int() },
+    { job_id: publicId() },
     (args) => tools.getJob(args),
   );
 
@@ -429,7 +436,7 @@ Max 25 per page; use next_page to continue.`,
     `Permanently delete a job (RUN, SCAN, MONITOR or LOCAL) and its S3 data.
 
 Only when the user asked. Soft-fails unless status is CANCELED or FINISHED.`,
-    { job_id: int() },
+    { job_id: publicId() },
     (args) => tools.deleteJob(args),
   );
 
@@ -472,7 +479,7 @@ added automatically.`,
 
 Only when the user asked. Does not cancel in-flight RUNNING executions — use
 stop_execution per id for that. Soft-fails if the scan is already CANCELED or FINISHED.`,
-    { scan_id: int() },
+    { scan_id: publicId() },
     (args) => tools.stopScan(args),
   );
 
@@ -481,7 +488,7 @@ stop_execution per id for that. Soft-fails if the scan is already CANCELED or FI
     `Cancel a RUN job and its in-flight executions.
 
 Only when the user asked. Soft-fails if the run is already CANCELED or FINISHED.`,
-    { run_id: int() },
+    { run_id: publicId() },
     (args) => tools.stopRun(args),
   );
 
@@ -499,14 +506,14 @@ Only when the user asked. Scans and monitors are left alone; use stop_scan for a
     `Pause a RUNNING scan (no new executions until resume_scan).
 
 Only when the user asked. Soft-fails if the scan is not RUNNING.`,
-    { scan_id: int() },
+    { scan_id: publicId() },
     (args) => tools.pauseScan(args),
   );
 
   tool(
     "resume_scan",
     `Resume a PAUSED scan. Only when the user asked. Soft-fails if not PAUSED.`,
-    { scan_id: int() },
+    { scan_id: publicId() },
     (args) => tools.resumeScan(args),
   );
 
@@ -515,7 +522,7 @@ Only when the user asked. Soft-fails if the scan is not RUNNING.`,
     `Delete this scan's non-RUNNING reports (executions). Does not delete the scan job.
 
 Only when the user asked. RUNNING executions are skipped by the API.`,
-    { scan_id: int() },
+    { scan_id: publicId() },
     (args) => tools.cleanScan(args),
   );
 
@@ -524,7 +531,7 @@ Only when the user asked. RUNNING executions are skipped by the API.`,
     `Delete this monitor's non-RUNNING reports (executions). Does not delete the monitor job.
 
 Only when the user asked. RUNNING executions are skipped by the API. Use delete_job after the monitor is CANCELED or FINISHED.`,
-    { monitor_id: int() },
+    { monitor_id: publicId() },
     (args) => tools.cleanMonitor(args),
   );
 
@@ -553,8 +560,8 @@ kind: SECURITY_ADVISORY or ISSUE. provider: GITHUB. order: ASC or DESC.
 Optional finding_id or execution_id filters. Returns titles and links (external_url),
 not the full advisory text; use get_advisory for details.`,
     {
-      execution_id: optInt(),
-      finding_id: optInt(),
+      execution_id: optPublicId(),
+      finding_id: optPublicId(),
       kind: optStr(),
       provider: optStr(),
       order: optStr(),
@@ -567,7 +574,7 @@ not the full advisory text; use get_advisory for details.`,
     "get_advisory",
     `Details of one external issue / security advisory, with advisory_url. The description is
 capped at ${MAX_ADVISORY_DESCRIPTION_CHARS} chars unless full_description=true (use that before update_advisory).`,
-    { advisory_id: int(), full_description: z.boolean().nullish() },
+    { advisory_id: publicId(), full_description: z.boolean().nullish() },
     (args) => tools.getAdvisory(args),
   );
 
@@ -580,7 +587,7 @@ analysis if any). Optional visibility (PUBLIC, PRIVATE, UNLISTED; default UNLIST
 Does not contact GitHub — call publish_security_advisory when asked to publish.
 Creating a draft can promote a PRIVATE execution to UNLISTED. If one already exists
 for the finding, returns the existing row.`,
-    { finding_id: int(), visibility: optStr() },
+    { finding_id: publicId(), visibility: optStr() },
     (args) => tools.createSecurityAdvisory(args),
   );
 
@@ -590,7 +597,7 @@ for the finding, returns the existing row.`,
 
 Only when the user asked to publish. Uses finding_id (not advisory_id). Requires a
 prior create_security_advisory draft. Returns external_url on success.`,
-    { finding_id: int() },
+    { finding_id: publicId() },
     (args) => tools.publishSecurityAdvisory(args),
   );
 
@@ -600,7 +607,7 @@ prior create_security_advisory draft. Returns external_url on success.`,
 
 Needs a GitHub PAT in Settings. advisory_id from get_advisory / list_advisories.
 The state is not stored locally.`,
-    { advisory_id: int() },
+    { advisory_id: publicId() },
     (args) => tools.getAdvisoryStatus(args),
   );
 
@@ -609,7 +616,7 @@ The state is not stored locally.`,
     `Change an advisory's visibility (PUBLIC, PRIVATE or UNLISTED).
 
 Only when the user asked. Does not change the GitHub remote advisory.`,
-    { advisory_id: int(), visibility: z.string() },
+    { advisory_id: publicId(), visibility: z.string() },
     (args) => tools.updateAdvisoryVisibility(args),
   );
 
@@ -620,7 +627,7 @@ technical detail before publishing. Each field passed replaces the whole value.
 
 Only when the user asked. Drafts only; a published advisory is edited on GitHub. Read the full
 text first with get_advisory(full_description=true).`,
-    { advisory_id: int(), title: optStr(), description: optStr() },
+    { advisory_id: publicId(), title: optStr(), description: optStr() },
     (args) => tools.updateAdvisory(args),
   );
 
@@ -629,7 +636,7 @@ text first with get_advisory(full_description=true).`,
     `Delete the security advisory for a finding (PRO/ENTERPRISE; by finding_id).
 
 Only when the user asked. Removes the local row and best-effort closes on GitHub (warning if that fails).`,
-    { finding_id: int() },
+    { finding_id: publicId() },
     (args) => tools.deleteSecurityAdvisory(args),
   );
 
@@ -876,7 +883,7 @@ timed_out is true. Output is capped.`,
 
 Returns host, username and a password token for an interactive shell; this tool cannot
 run commands itself. Only call it when the user asks to debug a running execution.`,
-    { execution_id: int() },
+    { execution_id: publicId() },
     (args) => tools.sshIntoExecution(args),
   );
 

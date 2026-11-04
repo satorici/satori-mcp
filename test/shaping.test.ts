@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as shaping from "../src/shaping.js";
+import { pid } from "./ids.js";
 
 describe("tailLines", () => {
   it("pages backwards", () => {
@@ -35,7 +36,7 @@ it("summarizeExecution caps tests and drops logs", () => {
   }));
   detail[0].asserts = [{ msg: "y".repeat(5000) }];
   const summary = shaping.summarizeExecution(
-    { id: 1, status: "FINISHED", visibility: "UNLISTED", report: { total_fails: 2, detail } },
+    { id: pid(1), status: "FINISHED", visibility: "UNLISTED", report: { total_fails: 2, detail } },
     "http://r/1",
   );
   expect(summary.visibility).toBe("UNLISTED");
@@ -54,20 +55,20 @@ it("outputIndex has counts, not content", () => {
 });
 
 it("detailFinding clips the snapshot", () => {
-  const result = shaping.detailFinding({ id: 1, snapshot: "z".repeat(100_000) });
+  const result = shaping.detailFinding({ id: pid(1), snapshot: "z".repeat(100_000) });
   expect(result.snapshot.length).toBeLessThan(shaping.MAX_SNAPSHOT_CHARS + 100);
 });
 
 it("summarizeFinding includes assignee_id", () => {
-  expect(shaping.summarizeFinding({ id: 1, assignee_id: 9 }).assignee_id).toBe(9);
-  expect(shaping.summarizeFinding({ id: 1 }).assignee_id).toBeNull();
+  expect(shaping.summarizeFinding({ id: pid(1), assignee_id: 9 }).assignee_id).toBe(9);
+  expect(shaping.summarizeFinding({ id: pid(1) }).assignee_id).toBeNull();
 });
 
 it("summarizeFindingEvent clips payload and keeps display_name", () => {
   const event = shaping.summarizeFindingEvent({
     kind: "event",
     id: 2,
-    finding_id: 3,
+    finding_id: pid(3),
     type: "STATUS_CHANGED",
     payload: { note: "n".repeat(5000) },
     display_name: "Ada",
@@ -78,8 +79,8 @@ it("summarizeFindingEvent clips payload and keeps display_name", () => {
 });
 
 it("summarizeExecutionRow works without a report", () => {
-  const row = shaping.summarizeExecutionRow({ id: 1, status: "QUEUED" }, "u");
-  expect(row.id).toBe(1);
+  const row = shaping.summarizeExecutionRow({ id: pid(1), status: "QUEUED" }, "u");
+  expect(row.id).toBe(pid(1));
   expect(row.total_fails).toBeNull();
   expect(row.job_type).toBeNull();
 });
@@ -100,8 +101,8 @@ it("summarizeTimeline keeps the last 20 and clips", () => {
 });
 
 it("summarizeJob keeps compact fields", () => {
-  const job = shaping.summarizeJob({ id: 1, type: "RUN", status: "FINISHED", container_settings: { big: 1 } });
-  expect(job.id).toBe(1);
+  const job = shaping.summarizeJob({ id: pid(1), type: "RUN", status: "FINISHED", container_settings: { big: 1 } });
+  expect(job.id).toBe(pid(1));
   expect(job).not.toHaveProperty("container_settings");
 });
 
@@ -113,7 +114,7 @@ it("clip reports how much was cut", () => {
 it("detailAdvisory clips description and keeps list fields", () => {
   const result = shaping.detailAdvisory(
     {
-      id: 1,
+      id: pid(1),
       title: "t",
       description: "d".repeat(10_000),
       vulnerabilities: [{ package_name: "p", note: "n".repeat(2000) }],
@@ -123,13 +124,13 @@ it("detailAdvisory clips description and keeps list fields", () => {
   expect(result.description.length).toBeLessThan(shaping.MAX_ADVISORY_DESCRIPTION_CHARS + 100);
   expect(result.vulnerabilities[0].note.length).toBeLessThan(600);
   expect(result.advisory_url).toBe("http://dash/advisories/1");
-  expect(shaping.summarizeAdvisory({ id: 1, description: "long" })).not.toHaveProperty("description");
+  expect(shaping.summarizeAdvisory({ id: pid(1), description: "long" })).not.toHaveProperty("description");
 });
 
 it("summarizeAiAnalysis clips text, caps fix_steps, and keeps useful data", () => {
   const result = shaping.summarizeAiAnalysis({
     id: 1,
-    finding_id: 9,
+    finding_id: pid(9),
     model: "m",
     status: "COMPLETED",
     risk: "HIGH",

@@ -158,7 +158,7 @@ export async function bundleSource(
   return uploadBundle(bundle);
 }
 
-async function firstExecutionId(jobId: number, attempts = 15): Promise<number | null> {
+async function firstExecutionId(jobId: string, attempts = 15): Promise<string | null> {
   for (let i = 0; i < attempts; i++) {
     const { items } = await client.get("/executions", { job_id: jobId, quantity: 1 });
     if (items.length) return items[0].id;
@@ -167,7 +167,7 @@ async function firstExecutionId(jobId: number, attempts = 15): Promise<number | 
   return null;
 }
 
-export async function executionSummary(executionId: number): Promise<Dict> {
+export async function executionSummary(executionId: string): Promise<Dict> {
   const execution = await client.get(`/executions/${executionId}`);
   return shaping.summarizeExecution(execution, reportUrl(executionId));
 }
@@ -452,12 +452,12 @@ export const runLocal = safe(async (args: RunLocalArgs = {}): Promise<Dict> => {
   return result;
 });
 
-export const getExecution = safe(async ({ execution_id }: { execution_id: number }) =>
+export const getExecution = safe(async ({ execution_id }: { execution_id: string }) =>
   executionSummary(execution_id),
 );
 
 export interface ListExecutionsArgs {
-  job_id?: number | null;
+  job_id?: string | null;
   status?: string[] | null;
   report_status?: string | null;
   job_type?: string | null;
@@ -468,8 +468,8 @@ export interface ListExecutionsArgs {
   severity?: number | null;
   playbook?: string | null;
   tags?: string[] | null;
-  id_gt?: number | null;
-  id_lt?: number | null;
+  id_gt?: string | null;
+  id_lt?: string | null;
   global_?: boolean;
   order?: string | null;
   quantity?: number;
@@ -519,7 +519,7 @@ export const listExecutions = safe(async (args: ListExecutionsArgs = {}): Promis
   );
 });
 
-export const stopExecution = safe(async ({ execution_id: id }: { execution_id: number }): Promise<Dict> => {
+export const stopExecution = safe(async ({ execution_id: id }: { execution_id: string }): Promise<Dict> => {
   const status = (await client.get(`/executions/${id}`)).status ?? null;
   if (status !== "RUNNING") {
     return { execution_id: id, status, stopped: false, hint: "Only RUNNING executions can be stopped." };
@@ -529,7 +529,7 @@ export const stopExecution = safe(async ({ execution_id: id }: { execution_id: n
 });
 
 export const updateExecutionVisibility = safe(
-  async ({ execution_id: id, visibility }: { execution_id: number; visibility: string }): Promise<Dict> => {
+  async ({ execution_id: id, visibility }: { execution_id: string; visibility: string }): Promise<Dict> => {
     visibility = visibility.toUpperCase();
     if (!VISIBILITIES.includes(visibility)) return oneOf("visibility", VISIBILITIES);
     // API returns 200 with an empty body.
@@ -538,7 +538,7 @@ export const updateExecutionVisibility = safe(
   },
 );
 
-export const deleteExecution = safe(async ({ execution_id: id }: { execution_id: number }): Promise<Dict> => {
+export const deleteExecution = safe(async ({ execution_id: id }: { execution_id: string }): Promise<Dict> => {
   const status = (await client.get(`/executions/${id}`)).status ?? null;
   if (status === "RUNNING") {
     return {
@@ -553,7 +553,7 @@ export const deleteExecution = safe(async ({ execution_id: id }: { execution_id:
 });
 
 export const deleteExecutions = safe(
-  async ({ execution_ids: ids }: { execution_ids: number[] }): Promise<Dict> => {
+  async ({ execution_ids: ids }: { execution_ids: string[] }): Promise<Dict> => {
     if (!ids.length) return { deleted: 0, hint: "No execution ids provided." };
     if (ids.length > MAX_DELETE_EXECUTIONS) {
       return { error: `execution_ids exceeds max ${MAX_DELETE_EXECUTIONS}.` };
@@ -566,7 +566,7 @@ export const deleteExecutions = safe(
   },
 );
 
-export const getExecutionPlaybook = safe(async ({ execution_id: id }: { execution_id: number }): Promise<Dict> => {
+export const getExecutionPlaybook = safe(async ({ execution_id: id }: { execution_id: string }): Promise<Dict> => {
   const text = await client.getText(`/executions/${id}/playbook`);
   return {
     execution_id: id,
@@ -576,7 +576,7 @@ export const getExecutionPlaybook = safe(async ({ execution_id: id }: { executio
 });
 
 export interface GetExecutionOutputArgs {
-  execution_id: number;
+  execution_id: string;
   test?: string | null;
   stream?: string;
   tail_lines?: number;
@@ -620,7 +620,7 @@ export const getExecutionOutput = safe(async (args: GetExecutionOutputArgs): Pro
 });
 
 export interface ListFindingsArgs {
-  execution_id?: number | null;
+  execution_id?: string | null;
   severity?: (number | string)[] | null;
   status?: string | null;
   source?: string | null;
@@ -655,19 +655,19 @@ export const listFindings = safe(async (args: ListFindingsArgs = {}): Promise<Di
 });
 
 export const getFinding = safe(
-  async ({ finding_id: id, include_timeline = true }: { finding_id: number; include_timeline?: boolean }) => {
+  async ({ finding_id: id, include_timeline = true }: { finding_id: string; include_timeline?: boolean }) => {
     const result = shaping.detailFinding(await client.get(`/findings/${id}`));
     if (include_timeline) Object.assign(result, shaping.summarizeTimeline(await client.get(`/findings/${id}/timeline`)));
     return result;
   },
 );
 
-export const getFindingTimeline = safe(async ({ finding_id: id }: { finding_id: number }) =>
+export const getFindingTimeline = safe(async ({ finding_id: id }: { finding_id: string }) =>
   shaping.summarizeTimeline(await client.get(`/findings/${id}/timeline`)),
 );
 
 export const updateFindingStatus = safe(
-  async ({ finding_id: id, status, comment }: { finding_id: number; status: string; comment?: string | null }) => {
+  async ({ finding_id: id, status, comment }: { finding_id: string; status: string; comment?: string | null }) => {
     status = status.toUpperCase();
     if (!FINDING_STATUSES.includes(status)) return oneOf("status", FINDING_STATUSES);
     if (comment !== null && comment !== undefined && comment.length > shaping.MAX_COMMENT_CHARS) {
@@ -689,7 +689,7 @@ export const updateFindingStatus = safe(
 );
 
 export interface UpdateFindingArgs {
-  finding_id: number;
+  finding_id: string;
   status?: string | null;
   severity?: number | null;
   assignee_id?: number | null;
@@ -725,7 +725,7 @@ export const updateFinding = safe(async (args: UpdateFindingArgs): Promise<Dict>
 });
 
 export interface ListFindingEventsArgs {
-  execution_id: number;
+  execution_id: string;
   quantity?: number;
   page?: number;
   order?: string | null;
@@ -747,7 +747,7 @@ export const listFindingEvents = safe(async (args: ListFindingEventsArgs): Promi
   );
 });
 
-export const addFindingComment = safe(async ({ finding_id: id, body }: { finding_id: number; body: string }) => {
+export const addFindingComment = safe(async ({ finding_id: id, body }: { finding_id: string; body: string }) => {
   if (!body || !body.trim()) return { error: "body must be a non-empty comment." };
   if (body.length > shaping.MAX_COMMENT_CHARS) {
     return { error: `comment exceeds ${shaping.MAX_COMMENT_CHARS} characters.` };
@@ -762,7 +762,7 @@ export const editFindingComment = safe(
     comment_id,
     body,
   }: {
-    finding_id: number;
+    finding_id: string;
     comment_id: number;
     body: string;
   }): Promise<Dict> => {
@@ -780,7 +780,7 @@ export const editFindingComment = safe(
 );
 
 export const deleteFindingComment = safe(
-  async ({ finding_id: id, comment_id }: { finding_id: number; comment_id: number }): Promise<Dict> => {
+  async ({ finding_id: id, comment_id }: { finding_id: string; comment_id: number }): Promise<Dict> => {
     await client.delete(`/findings/${id}/comments/${comment_id}`);
     return { finding_id: id, comment_id, deleted: true };
   },
@@ -790,14 +790,14 @@ function shapeAiAnalysis(analysis: Dict): Dict {
   return shaping.summarizeAiAnalysis(analysis);
 }
 
-async function postFindingAiAnalysis(findingId: number, force: boolean): Promise<Dict> {
+async function postFindingAiAnalysis(findingId: string, force: boolean): Promise<Dict> {
   const response = await client.request("POST", `/findings/${findingId}/ai-analysis`, {
     params: force ? { force: true } : undefined,
   });
   return response.json() as Promise<Dict>;
 }
 
-async function waitForFindingAiAnalysis(findingId: number, deadlineMs: number, initial?: Dict): Promise<Dict> {
+async function waitForFindingAiAnalysis(findingId: string, deadlineMs: number, initial?: Dict): Promise<Dict> {
   let analysis: Dict = initial ?? (await client.get(`/findings/${findingId}/ai-analysis`));
   while (analysis.status === "PENDING" && deps.now() < deadlineMs) {
     await deps.sleep(AI_ANALYSIS_POLL_MS);
@@ -807,7 +807,7 @@ async function waitForFindingAiAnalysis(findingId: number, deadlineMs: number, i
 }
 
 /** Collect analysis rows for the given ids from the execution-scoped list (paginated). */
-async function fetchExecutionAnalysesByIds(executionId: number, ids: Set<number>): Promise<Map<number, Dict>> {
+async function fetchExecutionAnalysesByIds(executionId: string, ids: Set<number>): Promise<Map<number, Dict>> {
   const found = new Map<number, Dict>();
   let page = 1;
   while (found.size < ids.size) {
@@ -828,7 +828,7 @@ async function fetchExecutionAnalysesByIds(executionId: number, ids: Set<number>
 }
 
 async function waitForExecutionAiAnalyses(
-  executionId: number,
+  executionId: string,
   analysisIds: number[],
   deadlineMs: number,
   initial: Dict[],
@@ -843,7 +843,7 @@ async function waitForExecutionAiAnalyses(
   return analysisIds.map((id) => byId.get(id)).filter(Boolean) as Dict[];
 }
 
-export const getFindingAiAnalysis = safe(async ({ finding_id: id }: { finding_id: number }): Promise<Dict> => {
+export const getFindingAiAnalysis = safe(async ({ finding_id: id }: { finding_id: string }): Promise<Dict> => {
   try {
     return shapeAiAnalysis(await client.get(`/findings/${id}/ai-analysis`));
   } catch (e) {
@@ -859,7 +859,7 @@ export const getFindingAiAnalysis = safe(async ({ finding_id: id }: { finding_id
 });
 
 export interface AnalyzeFindingArgs {
-  finding_id: number;
+  finding_id: string;
   force?: boolean;
   wait?: boolean;
   wait_seconds?: number;
@@ -883,8 +883,8 @@ export const analyzeFinding = async (args: AnalyzeFindingArgs): Promise<Dict> =>
   withAi409Hint(await _analyzeFinding(args));
 
 export interface AnalyzeExecutionArgs {
-  execution_id: number;
-  finding_ids?: number[] | null;
+  execution_id: string;
+  finding_ids?: string[] | null;
   force?: boolean;
   wait?: boolean;
   wait_seconds?: number;
@@ -957,14 +957,14 @@ export const listJobs = safe(async (args: ListJobsArgs = {}): Promise<Dict> => {
   return shaping.paged(data.items.map(shaping.summarizeJob), data.total, page, quantity);
 });
 
-export const getJob = safe(async ({ job_id: id }: { job_id: number }): Promise<Dict> => {
+export const getJob = safe(async ({ job_id: id }: { job_id: string }): Promise<Dict> => {
   const result = shaping.summarizeJob(await client.get(`/jobs/${id}`));
   const { items } = await client.get("/executions", { job_id: id, quantity: 5, order: "DESC" });
   result.executions = items.map((e: Dict) => shaping.summarizeExecutionRow(e, reportUrl(e.id)));
   return result;
 });
 
-export const deleteJob = safe(async ({ job_id: id }: { job_id: number }): Promise<Dict> => {
+export const deleteJob = safe(async ({ job_id: id }: { job_id: string }): Promise<Dict> => {
   const job = await client.get(`/jobs/${id}`);
   const status = job.status ?? null;
   if (!DELETABLE_JOB_STATUSES.includes(status)) {
@@ -1020,33 +1020,33 @@ type VisibilityPageArgs = { visibility?: string | null; quantity?: number; page?
 
 export const listScans = safe(async (args: VisibilityPageArgs = {}) => listJobs({ ...args, type: "SCAN" }));
 
-async function requireJobType(id: number, type: string): Promise<Dict | { error: string }> {
+async function requireJobType(id: string, type: string): Promise<Dict | { error: string }> {
   const job = await client.get(`/jobs/${id}`);
   if (job.type !== type) return { error: `Job ${id} is type ${job.type ?? "unknown"}, not ${type}.` };
   return job;
 }
 
-async function requireScan(id: number): Promise<Dict | { error: string }> {
+async function requireScan(id: string): Promise<Dict | { error: string }> {
   return requireJobType(id, "SCAN");
 }
 
-async function requireMonitor(id: number): Promise<Dict | { error: string }> {
+async function requireMonitor(id: string): Promise<Dict | { error: string }> {
   return requireJobType(id, "MONITOR");
 }
 
-async function requireRun(id: number): Promise<Dict | { error: string }> {
+async function requireRun(id: string): Promise<Dict | { error: string }> {
   return requireJobType(id, "RUN");
 }
 
 /** Newest runs stop_all_runs looks at, the same window as the CLI's `stop all`. */
 export const STOP_ALL_RUNS_WINDOW = 100;
 
-async function cancelRun(id: number): Promise<void> {
+async function cancelRun(id: string): Promise<void> {
   // API returns 200 with an empty body.
   await client.request("PATCH", `/jobs/runs/${id}`, { json: { status: "CANCELED" } });
 }
 
-export const stopRun = safe(async ({ run_id: id }: { run_id: number }): Promise<Dict> => {
+export const stopRun = safe(async ({ run_id: id }: { run_id: string }): Promise<Dict> => {
   const job = await requireRun(id);
   if ("error" in job) return job;
   const status = job.status ?? null;
@@ -1068,11 +1068,11 @@ export const stopAllRuns = safe(async (): Promise<Dict> => {
     page: 1,
     order: "DESC",
   });
-  const active: number[] = items
+  const active: string[] = items
     .filter((job: Dict) => !DELETABLE_JOB_STATUSES.includes(job.status))
     .map((job: Dict) => job.id);
   const results = await Promise.allSettled(active.map(cancelRun));
-  const stopped: number[] = [];
+  const stopped: string[] = [];
   const failed: Dict[] = [];
   results.forEach((result, i) => {
     if (result.status === "fulfilled") stopped.push(active[i]);
@@ -1084,14 +1084,14 @@ export const stopAllRuns = safe(async (): Promise<Dict> => {
 });
 
 /** Page all executions for a job and bulk-delete non-RUNNING ones. Returns how many ids were sent. */
-async function cleanJobExecutions(jobId: number): Promise<number> {
-  const executionIds: number[] = [];
+async function cleanJobExecutions(jobId: string): Promise<number> {
+  const executionIds: string[] = [];
   let page = 1;
   while (true) {
     const data = await client.get("/executions", { job_id: jobId, quantity: 100, page });
     const items: Dict[] = data.items ?? [];
     if (!items.length) break;
-    executionIds.push(...items.map((item) => item.id as number));
+    executionIds.push(...items.map((item) => item.id as string));
     if (executionIds.length >= (data.total ?? 0)) break;
     page += 1;
   }
@@ -1101,7 +1101,7 @@ async function cleanJobExecutions(jobId: number): Promise<number> {
   return executionIds.length;
 }
 
-export const stopScan = safe(async ({ scan_id: id }: { scan_id: number }): Promise<Dict> => {
+export const stopScan = safe(async ({ scan_id: id }: { scan_id: string }): Promise<Dict> => {
   const job = await requireScan(id);
   if ("error" in job) return job;
   const status = job.status ?? null;
@@ -1121,7 +1121,7 @@ export const stopScan = safe(async ({ scan_id: id }: { scan_id: number }): Promi
   };
 });
 
-export const pauseScan = safe(async ({ scan_id: id }: { scan_id: number }): Promise<Dict> => {
+export const pauseScan = safe(async ({ scan_id: id }: { scan_id: string }): Promise<Dict> => {
   const job = await requireScan(id);
   if ("error" in job) return job;
   const status = job.status ?? null;
@@ -1141,7 +1141,7 @@ export const pauseScan = safe(async ({ scan_id: id }: { scan_id: number }): Prom
   };
 });
 
-export const resumeScan = safe(async ({ scan_id: id }: { scan_id: number }): Promise<Dict> => {
+export const resumeScan = safe(async ({ scan_id: id }: { scan_id: string }): Promise<Dict> => {
   const job = await requireScan(id);
   if ("error" in job) return job;
   const status = job.status ?? null;
@@ -1161,7 +1161,7 @@ export const resumeScan = safe(async ({ scan_id: id }: { scan_id: number }): Pro
   };
 });
 
-export const cleanScan = safe(async ({ scan_id: id }: { scan_id: number }): Promise<Dict> => {
+export const cleanScan = safe(async ({ scan_id: id }: { scan_id: string }): Promise<Dict> => {
   const job = await requireScan(id);
   if ("error" in job) return job;
   const deleted = await cleanJobExecutions(id);
@@ -1174,7 +1174,7 @@ export const cleanScan = safe(async ({ scan_id: id }: { scan_id: number }): Prom
 
 export const listMonitors = safe(async (args: VisibilityPageArgs = {}) => listJobs({ ...args, type: "MONITOR" }));
 
-export const cleanMonitor = safe(async ({ monitor_id: id }: { monitor_id: number }): Promise<Dict> => {
+export const cleanMonitor = safe(async ({ monitor_id: id }: { monitor_id: string }): Promise<Dict> => {
   const job = await requireMonitor(id);
   if ("error" in job) return job;
   const deleted = await cleanJobExecutions(id);
@@ -1231,8 +1231,8 @@ export const getPlaybook = safe(async ({ playbook_uri: uri }: { playbook_uri: st
 export const PUBLISH_ADVISORY_TIMEOUT_MS = 30_000;
 
 export interface ListAdvisoriesArgs {
-  execution_id?: number | null;
-  finding_id?: number | null;
+  execution_id?: string | null;
+  finding_id?: string | null;
   kind?: string | null;
   provider?: string | null;
   order?: string | null;
@@ -1263,11 +1263,11 @@ export const listAdvisories = safe(async (args: ListAdvisoriesArgs = {}): Promis
 });
 
 function shapeAdvisoryDetail(advisory: Dict, fullDescription = false): Dict {
-  const id = advisory.id as number | null | undefined;
+  const id = advisory.id as string | null | undefined;
   return shaping.detailAdvisory(advisory, id != null ? advisoryUrl(id) : null, fullDescription);
 }
 
-async function findSecurityAdvisoryForFinding(findingId: number): Promise<Dict | null> {
+async function findSecurityAdvisoryForFinding(findingId: string): Promise<Dict | null> {
   const data = await client.get("/external_issues", {
     finding_id: findingId,
     kind: "SECURITY_ADVISORY",
@@ -1277,12 +1277,12 @@ async function findSecurityAdvisoryForFinding(findingId: number): Promise<Dict |
 }
 
 export const getAdvisory = safe(
-  async ({ advisory_id: id, full_description }: { advisory_id: number; full_description?: boolean | null }) =>
+  async ({ advisory_id: id, full_description }: { advisory_id: string; full_description?: boolean | null }) =>
     shapeAdvisoryDetail(await client.get(`/external_issues/${id}`), full_description ?? false),
 );
 
 export interface CreateSecurityAdvisoryArgs {
-  finding_id: number;
+  finding_id: string;
   visibility?: string | null;
 }
 
@@ -1318,7 +1318,7 @@ export const createSecurityAdvisory = safe(async (args: CreateSecurityAdvisoryAr
   return result;
 });
 
-export const publishSecurityAdvisory = safe(async ({ finding_id: findingId }: { finding_id: number }): Promise<Dict> => {
+export const publishSecurityAdvisory = safe(async ({ finding_id: findingId }: { finding_id: string }): Promise<Dict> => {
   try {
     const response = await client.request("POST", "/external_issues/security_advisory/publish", {
       json: { finding_id: findingId },
@@ -1338,13 +1338,13 @@ export const publishSecurityAdvisory = safe(async ({ finding_id: findingId }: { 
   }
 });
 
-export const getAdvisoryStatus = safe(async ({ advisory_id: id }: { advisory_id: number }): Promise<Dict> => {
+export const getAdvisoryStatus = safe(async ({ advisory_id: id }: { advisory_id: string }): Promise<Dict> => {
   const data = await client.get(`/external_issues/${id}/status`);
   return { advisory_id: id, status: data.status ?? null };
 });
 
 export const updateAdvisoryVisibility = safe(
-  async ({ advisory_id: id, visibility }: { advisory_id: number; visibility: string }): Promise<Dict> => {
+  async ({ advisory_id: id, visibility }: { advisory_id: string; visibility: string }): Promise<Dict> => {
     visibility = visibility.toUpperCase();
     if (!VISIBILITIES.includes(visibility)) return oneOf("visibility", VISIBILITIES);
     // API returns 200 with an empty body.
@@ -1354,7 +1354,7 @@ export const updateAdvisoryVisibility = safe(
 );
 
 export interface UpdateAdvisoryArgs {
-  advisory_id: number;
+  advisory_id: string;
   title?: string | null;
   description?: string | null;
 }
@@ -1379,7 +1379,7 @@ export const updateAdvisory = safe(async ({ advisory_id: id, title, description 
 });
 
 export const deleteSecurityAdvisory = safe(
-  async ({ finding_id: findingId }: { finding_id: number }): Promise<Dict> => {
+  async ({ finding_id: findingId }: { finding_id: string }): Promise<Dict> => {
     const response = await client.request("DELETE", "/external_issues/security_advisory", {
       json: { finding_id: findingId },
     });
@@ -1701,7 +1701,7 @@ export const stopSshSession = safe(async ({ session_id: id }: { session_id: numb
   return { session_id: id, stopped: true, hint: "Stopping is asynchronous; call get_ssh_session to confirm FINISHED." };
 });
 
-export const sshIntoExecution = safe(async ({ execution_id: id }: { execution_id: number }): Promise<Dict> => {
+export const sshIntoExecution = safe(async ({ execution_id: id }: { execution_id: string }): Promise<Dict> => {
   const { host, token } = await client.get(`/executions/${id}/ssh`);
   return {
     execution_id: id,
