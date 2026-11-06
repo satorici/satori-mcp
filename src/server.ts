@@ -14,7 +14,7 @@ export const INSTRUCTIONS =
   "to read the YAML of a run, and stop_execution to cancel a running one. " +
   "Use list_jobs/get_job to find a job and its executions, and " +
   "update_finding_status to triage a finding (only when asked). " +
-  "Use update_finding to change severity/assignee/status without a comment (only when asked); " +
+  "Use update_finding to change severity/assignee/status/exploitability without a comment (only when asked); " +
   "add_finding_comment / edit_finding_comment / delete_finding_comment for comments (only when asked); " +
   "get_finding_timeline for one finding's history, list_finding_events for an execution's event feed. " +
   "analyze_finding / analyze_execution queue server-side AI analysis with the account's AI key " +
@@ -275,12 +275,14 @@ Use offset_from_end (from next_offset_from_end) to page backwards.`,
     `List findings (severity 0-5, where 0=BLOCKER … 5=INFO, or the names).
 
 status: OPEN, INVESTIGATING, TP, FIXED, FP, ACCEPTED.
+exploitability: UNKNOWN, EXPLOITABLE, NOT_EXPLOITABLE, INCONCLUSIVE.
 source: ASSERT (playbook assertion failures) or TOOL (findings parsed from tool output).
 order: ASC or DESC by creation time.`,
     {
       execution_id: optPublicId(),
       severity: z.array(z.union([int(), z.string()])).nullish(),
       status: optStr(),
+      exploitability: optStr(),
       source: optStr(),
       order: optStr(),
       ...paging(),
@@ -316,15 +318,19 @@ Changes shared triage state; use only when the user asked to triage this finding
 
   tool(
     "update_finding",
-    `Update a finding's status, severity and/or assignee (no comment).
+    `Update a finding's status, severity, assignee and/or exploitability (no comment).
 
-Only when the user asked. Provide at least one of status, severity (0-5, or null to clear)
-or assignee_id (null to clear). To triage and comment together, use update_finding_status.`,
+Only when the user asked. Provide at least one of status, severity (0-5, or null to clear),
+assignee_id (null to clear) or exploitability (UNKNOWN, EXPLOITABLE, NOT_EXPLOITABLE,
+INCONCLUSIVE). exploitability_reason is required unless exploitability is UNKNOWN and is recorded
+in the finding timeline. To triage and comment together, use update_finding_status.`,
     {
       finding_id: publicId(),
       status: optStr(),
       severity: optInt(),
       assignee_id: optInt(),
+      exploitability: optStr(),
+      exploitability_reason: optStr(),
     },
     (args) => tools.updateFinding(args),
   );
@@ -622,12 +628,20 @@ Only when the user asked. Does not change the GitHub remote advisory.`,
 
   tool(
     "update_advisory",
-    `Edit a draft advisory's title and/or description (Markdown), e.g. to humanize the generated
-technical detail before publishing. Each field passed replaces the whole value.
+    `Edit a draft advisory's title, description (Markdown), severity and/or CVSS vector, e.g. to
+humanize the generated technical detail before publishing. Each field passed replaces the whole value.
+severity: low, medium, high or critical (independently assessed advisory severity).
+cvss_vector: CVSS 4.0 Base vector, e.g. CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N.
 
 Only when the user asked. Drafts only; a published advisory is edited on GitHub. Read the full
 text first with get_advisory(full_description=true).`,
-    { advisory_id: publicId(), title: optStr(), description: optStr() },
+    {
+      advisory_id: publicId(),
+      title: optStr(),
+      description: optStr(),
+      severity: optStr(),
+      cvss_vector: optStr(),
+    },
     (args) => tools.updateAdvisory(args),
   );
 

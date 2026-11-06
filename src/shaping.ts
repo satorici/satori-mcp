@@ -153,6 +153,7 @@ export function summarizeFinding(finding: Dict): Dict {
     title: clip(finding.title ?? null),
     severity: finding.severity ?? null,
     status: finding.status ?? null,
+    exploitability: finding.exploitability ?? null,
     source: finding.source ?? null,
     execution_id: finding.execution_id ?? null,
     assignee_id: finding.assignee_id ?? null,
@@ -162,6 +163,7 @@ export function summarizeFinding(finding: Dict): Dict {
 
 export function detailFinding(finding: Dict): Dict {
   const result = summarizeFinding(finding);
+  result.exploitability_reason = finding.exploitability_reason ?? null;
   result.created_at = finding.created_at ?? null;
   const snapshot = finding.snapshot;
   if (snapshot !== undefined && snapshot !== null) {
@@ -316,6 +318,7 @@ export function summarizeAdvisory(advisory: Dict): Dict {
     provider: advisory.provider ?? null,
     title: clip(advisory.title ?? null, 200),
     severity: advisory.severity ?? null,
+    cvss_vector: advisory.cvss_vector ?? null,
     repository: advisory.repository ?? null,
     visibility: advisory.visibility ?? null,
     external_id: advisory.external_id ?? null,

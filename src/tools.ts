@@ -40,6 +40,8 @@ export const REPORT_STATUSES = ["PASS", "FAIL"];
 export const JOB_TYPES = ["RUN", "SCAN", "MONITOR", "GITHUB", "LOCAL"];
 export const VISIBILITIES = ["PUBLIC", "PRIVATE", "UNLISTED"];
 export const FINDING_STATUSES = ["OPEN", "INVESTIGATING", "TP", "FIXED", "FP", "ACCEPTED"];
+export const EXPLOITABILITY_VALUES = ["UNKNOWN", "EXPLOITABLE", "NOT_EXPLOITABLE", "INCONCLUSIVE"];
+export const ADVISORY_SEVERITIES = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
 export const LISTABLE_JOB_TYPES = ["RUN", "SCAN", "MONITOR"];
 export const FINDING_SOURCES = ["ASSERT", "TOOL"];
 export const ORDERS = ["ASC", "DESC"];
@@ -623,6 +625,7 @@ export interface ListFindingsArgs {
   execution_id?: string | null;
   severity?: (number | string)[] | null;
   status?: string | null;
+  exploitability?: string | null;
   source?: string | null;
   order?: string | null;
   quantity?: number;
@@ -632,6 +635,10 @@ export interface ListFindingsArgs {
 export const listFindings = safe(async (args: ListFindingsArgs = {}): Promise<Dict> => {
   const { page = 1 } = args;
   const status = args.status ? args.status.toUpperCase() : null;
+  const exploitability = args.exploitability ? args.exploitability.toUpperCase() : null;
+  if (exploitability && !EXPLOITABILITY_VALUES.includes(exploitability)) {
+    return oneOf("exploitability", EXPLOITABILITY_VALUES);
+  }
   const source = args.source ? args.source.toUpperCase() : null;
   const order = args.order ? args.order.toUpperCase() : null;
   if (status && !FINDING_STATUSES.includes(status)) return oneOf("status", FINDING_STATUSES);
@@ -648,6 +655,7 @@ export const listFindings = safe(async (args: ListFindingsArgs = {}): Promise<Di
   if (args.execution_id !== null && args.execution_id !== undefined) params.execution_id = args.execution_id;
   if (severities && severities.length) params.severity = severities;
   if (status) params.status = status;
+  if (exploitability) params.exploitability = exploitability;
   if (source) params.source = source;
   if (order) params.order = order;
   const data = await client.get("/findings", params);
@@ -693,6 +701,8 @@ export interface UpdateFindingArgs {
   status?: string | null;
   severity?: number | null;
   assignee_id?: number | null;
+  exploitability?: string | null;
+  exploitability_reason?: string | null;
 }
 
 export const updateFinding = safe(async (args: UpdateFindingArgs): Promise<Dict> => {
@@ -716,8 +726,20 @@ export const updateFinding = safe(async (args: UpdateFindingArgs): Promise<Dict>
     }
     body.assignee_id = args.assignee_id;
   }
+  const reason = (args.exploitability_reason ?? "").trim();
+  if (args.exploitability !== undefined && args.exploitability !== null) {
+    const exploitability = args.exploitability.toUpperCase();
+    if (!EXPLOITABILITY_VALUES.includes(exploitability)) return oneOf("exploitability", EXPLOITABILITY_VALUES);
+    if (exploitability !== "UNKNOWN" && !reason) {
+      return { error: "exploitability_reason is required unless exploitability is UNKNOWN." };
+    }
+    body.exploitability = exploitability;
+    body.exploitability_reason = reason || null;
+  } else if (reason) {
+    return { error: "exploitability_reason requires exploitability." };
+  }
   if (!Object.keys(body).length) {
-    return { error: "Provide at least one of status, severity or assignee_id." };
+    return { error: "Provide at least one of status, severity, assignee_id or exploitability." };
   }
 
   const updated = await client.patch(`/findings/${id}`, body);
@@ -1357,13 +1379,22 @@ export interface UpdateAdvisoryArgs {
   advisory_id: string;
   title?: string | null;
   description?: string | null;
+  severity?: string | null;
+  cvss_vector?: string | null;
 }
 
-export const updateAdvisory = safe(async ({ advisory_id: id, title, description }: UpdateAdvisoryArgs) => {
+export const updateAdvisory = safe(async (args: UpdateAdvisoryArgs) => {
+  const { advisory_id: id, title, description, severity, cvss_vector: cvssVector } = args;
   const json: Dict = {};
   if (title != null) json.title = title;
   if (description != null) json.description = description;
-  if (Object.keys(json).length === 0) return { error: "Pass title and/or description." };
+  if (severity != null) {
+    const upper = severity.toUpperCase();
+    if (!ADVISORY_SEVERITIES.includes(upper)) return oneOf("severity", ADVISORY_SEVERITIES);
+    json.severity = upper;
+  }
+  if (cvssVector != null) json.cvss_vector = cvssVector;
+  if (Object.keys(json).length === 0) return { error: "Pass title, description, severity and/or cvss_vector." };
   try {
     // API returns 200 with an empty body.
     await client.request("PATCH", `/external_issues/${id}`, { json });

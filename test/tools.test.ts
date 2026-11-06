@@ -322,6 +322,47 @@ describe("update_finding", () => {
     expect((await tools.updateFinding({ finding_id: pid(1) })).error).toContain("at least one");
     expect((await tools.updateFinding({ finding_id: pid(1), status: "DONE" })).error).toContain("status must be");
     expect((await tools.updateFinding({ finding_id: pid(1), severity: 9 })).error).toContain("severity");
+    expect((await tools.updateFinding({ finding_id: pid(1), exploitability: "maybe" })).error).toContain(
+      "exploitability must be",
+    );
+    expect((await tools.updateFinding({ finding_id: pid(1), exploitability: "EXPLOITABLE" })).error).toContain(
+      "exploitability_reason is required",
+    );
+    expect(
+      (await tools.updateFinding({ finding_id: pid(1), exploitability: "exploitable", exploitability_reason: "  " }))
+        .error,
+    ).toContain("exploitability_reason is required");
+    expect((await tools.updateFinding({ finding_id: pid(1), exploitability_reason: "why" })).error).toContain(
+      "requires exploitability",
+    );
+  });
+
+  it("patches exploitability with a trimmed reason", async () => {
+    const seen: unknown[] = [];
+    mockClient("patch", (url, body) => {
+      seen.push([url, body]);
+      return { id: pid(3), title: "t", ...body };
+    });
+
+    const updated = await tools.updateFinding({
+      finding_id: pid(3),
+      exploitability: "not_exploitable",
+      exploitability_reason: "  Input is sanitized upstream ",
+    });
+    expect(seen).toEqual([
+      [
+        `/findings/${pid(3)}`,
+        { exploitability: "NOT_EXPLOITABLE", exploitability_reason: "Input is sanitized upstream" },
+      ],
+    ]);
+    expect(updated).toMatchObject({
+      exploitability: "NOT_EXPLOITABLE",
+      exploitability_reason: "Input is sanitized upstream",
+    });
+
+    seen.length = 0;
+    await tools.updateFinding({ finding_id: pid(3), exploitability: "unknown" });
+    expect(seen).toEqual([[`/findings/${pid(3)}`, { exploitability: "UNKNOWN", exploitability_reason: null }]]);
   });
 
   it("patches only provided fields and clears with null", async () => {
@@ -970,6 +1011,18 @@ describe("list_findings", () => {
     expect((await tools.listFindings({ order: "up" })).error).toContain("order must be");
   });
 
+  it("filters by exploitability", async () => {
+    const seen: any = {};
+    mockClient("get", (_url, params) => {
+      Object.assign(seen, params);
+      return { total: 1, items: [{ id: pid(1), title: "t", exploitability: "EXPLOITABLE" }] };
+    });
+    const result = await tools.listFindings({ exploitability: "exploitable" });
+    expect(seen.exploitability).toBe("EXPLOITABLE");
+    expect(result.items[0].exploitability).toBe("EXPLOITABLE");
+    expect((await tools.listFindings({ exploitability: "yes" })).error).toContain("exploitability must be");
+  });
+
   it("accepts severity names", async () => {
     const seen: any = {};
     mockClient("get", (_url, params) => {
@@ -1041,7 +1094,12 @@ describe("security advisories", () => {
       patches.push([method, path, options?.json]);
       return new Response(null);
     });
-    expect((await tools.updateAdvisory({ advisory_id: pid(42) })).error).toBe("Pass title and/or description.");
+    expect((await tools.updateAdvisory({ advisory_id: pid(42) })).error).toBe(
+      "Pass title, description, severity and/or cvss_vector.",
+    );
+    expect((await tools.updateAdvisory({ advisory_id: pid(42), severity: "severe" })).error).toContain(
+      "severity must be",
+    );
     expect(patches).toEqual([]);
 
     expect(await tools.updateAdvisory({ advisory_id: pid(42), title: "Plain title" })).toMatchObject({
@@ -1055,6 +1113,13 @@ describe("security advisories", () => {
       ["PATCH", `/external_issues/${pid(42)}`, { title: "Plain title" }],
       ["PATCH", `/external_issues/${pid(42)}`, { title: "T", description: "Body" }],
     ]);
+
+    patches.length = 0;
+    const vector = "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N";
+    expect(await tools.updateAdvisory({ advisory_id: pid(42), severity: "high", cvss_vector: vector })).toMatchObject({
+      updated: ["severity", "cvss_vector"],
+    });
+    expect(patches).toEqual([["PATCH", `/external_issues/${pid(42)}`, { severity: "HIGH", cvss_vector: vector }]]);
   });
 
   it("update_advisory explains a published advisory's 409", async () => {
