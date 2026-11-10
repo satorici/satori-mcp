@@ -181,7 +181,8 @@ Unlike run_playbook, commands execute locally with the user's privileges, so onl
 playbooks the user asked for or that you wrote for them. Provide EXACTLY ONE of
 playbook_path, playbook_yaml or playbook_uri. Working directory: \`repository\`
 ("owner/repo", shallow-cloned to a temp dir) OR \`directory\` (existing local dir);
-default is the server's current directory. \`run\` limits execution to test paths with
+default is the server's current directory. Without \`repository\`, the run is linked to the
+GitHub repo of the working directory's git \`origin\` remote, if any. \`run\` limits execution to test paths with
 those prefixes. timeout_seconds max 3600.
 Returns the same shape as run_playbook; analyze with get_execution_output and list_findings.`,
     {

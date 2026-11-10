@@ -4,6 +4,7 @@ import { accessSync, constants, mkdirSync, rmSync } from "node:fs";
 import { basename, delimiter, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { SatoriError } from "./errors.js";
+import { parseGithubRemote } from "./repo.js";
 
 export const CLONE_ATTEMPTS = 3;
 const CLONE_BACKOFF_MS = 10_000;
@@ -31,11 +32,21 @@ export const gitDeps = {
       child.on("close", (code) => resolve({ code, stderr }));
     });
   },
+  /** stdout of a git command, or null when it fails. */
+  output(cmd: string[], env: NodeJS.ProcessEnv): Promise<string | null> {
+    return new Promise((resolve) => {
+      const child = spawn(cmd[0], cmd.slice(1), { stdio: ["ignore", "pipe", "ignore"], env });
+      let stdout = "";
+      child.stdout.setEncoding("utf-8").on("data", (chunk: string) => (stdout += chunk));
+      child.on("error", () => resolve(null));
+      child.on("close", (code) => resolve(code === 0 ? stdout : null));
+    });
+  },
   sleep: (ms: number) => sleep(ms),
   rm: (path: string) => rmSync(path, { recursive: true, force: true }),
 };
 
-export function requireGit(): string {
+function findGit(): string | null {
   for (const dir of (process.env.PATH ?? "").split(delimiter)) {
     if (!dir) continue;
     const candidate = join(dir, "git");
@@ -46,7 +57,28 @@ export function requireGit(): string {
       // not here
     }
   }
-  throw new SatoriError("`git` is not installed or not on PATH.");
+  return null;
+}
+
+export function requireGit(): string {
+  const git = findGit();
+  if (!git) throw new SatoriError("`git` is not installed or not on PATH.");
+  return git;
+}
+
+/**
+ * The GitHub `owner/repo` of the `origin` remote of the git checkout containing `directory`
+ * (default: the server's current directory). Null when there is no git, no checkout, no origin,
+ * or origin is not on github.com: detection never fails the caller.
+ */
+export async function originRepository(directory?: string): Promise<string | null> {
+  const git = findGit();
+  if (!git) return null;
+  const url = await gitDeps.output([git, "-C", directory ?? ".", "remote", "get-url", "origin"], {
+    ...process.env,
+    GIT_TERMINAL_PROMPT: "0",
+  });
+  return url === null ? null : parseGithubRemote(url);
 }
 
 /**

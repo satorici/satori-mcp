@@ -8,10 +8,10 @@ import { ApiClient, buildQuery } from "../src/api.js";
 import { dumpFileUris, makeBundle } from "../src/bundle.js";
 import { Config, config } from "../src/config.js";
 import { SatoriError } from "../src/errors.js";
-import { CLONE_ATTEMPTS, cloneRepo, gitDeps } from "../src/git.js";
+import { CLONE_ATTEMPTS, cloneRepo, gitDeps, originRepository } from "../src/git.js";
 import { runTestFilter } from "../src/outputs.js";
 import { pyRepr, pyTuple, splitLines } from "../src/pyrepr.js";
-import { isGithubRepo, wildcardOwner } from "../src/repo.js";
+import { isGithubRepo, parseGithubRemote, wildcardOwner } from "../src/repo.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -72,6 +72,55 @@ describe("cloneRepo", () => {
     const calls = fake(Array(10).fill({ code: 128, stderr: "early EOF" }));
     await expect(cloneRepo("git", "a/b", dest)).rejects.toThrow(SatoriError);
     expect(calls).toHaveLength(CLONE_ATTEMPTS);
+  });
+});
+
+describe("originRepository", () => {
+  it("reads the origin remote of the directory", async () => {
+    const output = vi.spyOn(gitDeps, "output").mockResolvedValue("git@github.com:acme/app.git\n");
+    expect(await originRepository("/work")).toBe("acme/app");
+    expect(output.mock.calls[0][0].slice(1)).toEqual(["-C", "/work", "remote", "get-url", "origin"]);
+  });
+
+  it("is null without an origin", async () => {
+    vi.spyOn(gitDeps, "output").mockResolvedValue(null);
+    expect(await originRepository()).toBeNull();
+  });
+
+  it("is null without git", async () => {
+    const output = vi.spyOn(gitDeps, "output");
+    vi.stubEnv("PATH", "");
+    expect(await originRepository()).toBeNull();
+    expect(output).not.toHaveBeenCalled();
+    vi.unstubAllEnvs();
+  });
+
+  it("finds this checkout's origin and nothing outside a checkout", async () => {
+    expect(await originRepository(import.meta.dirname)).toMatch(/^[\w.-]+\/[\w.-]+$/);
+    expect(await originRepository(tmpdir())).toBeNull();
+  });
+});
+
+describe("parseGithubRemote", () => {
+  it.each([
+    ["git@github.com:acme/app.git", "acme/app"],
+    ["git@github.com:acme/app", "acme/app"],
+    ["ssh://git@github.com/acme/app.git", "acme/app"],
+    ["ssh://git@github.com:22/acme/app.git", "acme/app"],
+    ["https://github.com/acme/app.git", "acme/app"],
+    ["https://github.com/acme/app", "acme/app"],
+    ["https://github.com/acme/app/", "acme/app"],
+    ["https://token@github.com/Acme/my.app.git\n", "Acme/my.app"],
+    ["git://github.com/acme/app.git", "acme/app"],
+    ["https://gitlab.com/acme/app.git", null],
+    ["git@github.com.evil.test:acme/app.git", null],
+    ["https://evil.test/github.com/acme/app", null],
+    ["https://github.com/acme", null],
+    ["https://github.com/acme/app/tree/main", null],
+    ["/srv/git/app.git", null],
+    ["", null],
+  ])("%s -> %s", (url, expected) => {
+    expect(parseGithubRemote(url)).toBe(expected);
   });
 });
 

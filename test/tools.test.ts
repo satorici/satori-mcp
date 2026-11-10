@@ -25,6 +25,7 @@ let tmp: string;
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "satori-mcp-test-"));
   vi.spyOn(tools.deps, "sleep").mockResolvedValue(undefined);
+  vi.spyOn(tools.deps, "originRepository").mockResolvedValue(null);
   vi.spyOn(BundleCache, "getBundleId").mockReturnValue(undefined);
   vi.spyOn(BundleCache, "setBundleId").mockReturnValue(undefined);
   for (const method of ["get", "post", "patch", "put", "delete", "getText", "postForm", "request"] as const) {
@@ -1431,8 +1432,24 @@ describe("run_local", () => {
     expect(result.report_url).toBeTruthy();
     expect(result.hint).toContain("get_execution_output");
     expect(runLocalJob.mock.calls[0][0]).toBe("bundle://b1");
-    expect(runLocalJob.mock.calls[0][1]).toMatchObject({ workdir: tmp, run: ["a"], timeout: 300 });
+    expect(runLocalJob.mock.calls[0][1]).toMatchObject({ workdir: tmp, run: ["a"], timeout: 300, repository: null });
     expect(write).not.toHaveBeenCalled();
+  });
+
+  it("links the run to the origin repository of the working directory", async () => {
+    const runLocalJob = vi
+      .spyOn(tools.deps, "runLocalJob")
+      .mockResolvedValue({ job: { id: pid(5) }, executionId: null, report: null, timedOut: false });
+    const origin = vi.spyOn(tools.deps, "originRepository").mockResolvedValue("acme/app");
+    mockClient("postForm", () => "b1");
+
+    await tools.runLocal({ playbook_yaml: "cmd: [echo hi]\n", directory: tmp });
+    expect(origin).toHaveBeenLastCalledWith(tmp);
+    expect(runLocalJob.mock.calls[0][1]).toMatchObject({ workdir: tmp, repository: "acme/app" });
+
+    await tools.runLocal({ playbook_yaml: "cmd: [echo hi]\n" });
+    expect(origin).toHaveBeenLastCalledWith(undefined);
+    expect(runLocalJob.mock.calls[1][1]).toMatchObject({ repository: "acme/app" });
   });
 });
 

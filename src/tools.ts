@@ -15,7 +15,7 @@ import { makeBundle, uploadBundle } from "./bundle.js";
 import { config } from "./config.js";
 import { advisoryUrl, DOCS_URL, reportUrl } from "./constants.js";
 import { ApiTimeoutError, AuthError, HttpStatusError, SatoriError } from "./errors.js";
-import { cloneRepo, requireGit } from "./git.js";
+import { cloneRepo, originRepository, requireGit } from "./git.js";
 import { runLocalJob } from "./local/localRun.js";
 import { loadExecutionOutputs, runTestFilter } from "./outputs.js";
 import { pyRepr, pyTuple } from "./pyrepr.js";
@@ -57,11 +57,12 @@ export const AI_ANALYSIS_POLL_MS = 2000;
 export const MAX_DELETE_EXECUTIONS = 100;
 export const DELETABLE_JOB_STATUSES = ["CANCELED", "FINISHED"];
 
-/** Indirection so tests can skip real waits and fake the local runner. */
+/** Indirection so tests can skip real waits and fake the local runner and git. */
 export const deps = {
   sleep: (ms: number) => sleep(ms),
   now: () => performance.now(),
   runLocalJob,
+  originRepository,
   loadExecutionOutputs,
 };
 
@@ -424,7 +425,8 @@ export const runLocal = safe(async (args: RunLocalArgs = {}): Promise<Dict> => {
     }
     outcome = await deps.runLocalJob(source, {
       parameters: args.parameters || {},
-      repository: repository ?? null,
+      // `repository` names it; otherwise it is the checkout the commands run in.
+      repository: repository || (await deps.originRepository(workdir)),
       workdir,
       run: args.run ?? [],
       timeout,
