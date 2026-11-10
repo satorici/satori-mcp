@@ -210,7 +210,7 @@ export function validateRules(rules: Dict): void {
     if ((tool.kind === "python-tool" || tool.kind === "tool") && !(tool.package && tool.version)) {
       throw new Error(`${tid}: ${tool.kind} needs package and version`);
     }
-    if (tool.kind === "tool") {
+    if (tool.kind === "tool" && !tool.install) {
       const managers = Object.values(rules.profiles[tool.language] ?? {}) as Dict[];
       if (!managers.length || !managers.every((m) => "tool_install" in m)) {
         throw new Error(`${tid}: every ${tool.language} profile needs tool_install`);
@@ -568,7 +568,7 @@ export function renderCommand(profile: Profile, rules: Dict, tool: Dict, install
     return `${cfg.run}${command}`;
   }
   if (tool.kind === "tool") {
-    addStep(cfg.tool_install);
+    addStep(tool.install ?? cfg.tool_install);
     return (cfg.tool ?? "") + command;
   }
   return verbatim ? command : `${cfg.run}${command}`;

@@ -86,7 +86,7 @@ const REPOS: Record<string, Record<string, string>> = {
 
 const EXPECTED_IDS: Record<string, string[]> = {
   py_uv: ["ruff_check", "ruff_format", "pytest", "pyrefly", "pyspector"],
-  node_pnpm: ["eslint", "tsc", "node_tests", "node_audit"],
+  node_pnpm: ["eslint", "tsc", "node_tests", "node_audit", "jsspector"],
   go: ["go_vet", "gofmt", "go_test", "govulncheck"],
   java_maven: ["maven_test"],
   csharp: ["dotnet_build", "dotnet_format", "dotnet_test", "dotnet_vulnerable"],
@@ -168,12 +168,34 @@ it("unconfigured optional tools are asked with defaults", () => {
   expect(ids(r)).not.toContain("vulture");
 });
 
+it("node repos get JSSpector as a security check, installed only in CI", () => {
+  const r = rec("node_pnpm");
+  expect(r.questions.map((q) => q.pref)).toContain("js_security");
+  const check = r.checks.find((c) => c.id === "jsspector")!;
+  expect(check.category).toBe("security");
+  expect(check.blocking).toBe(false);
+  expect(check.command).toBe('PATH="$HOME/.cargo/bin:$PATH" jsspector scan -f json .');
+  const step = r.install.find((s) => s.includes("jsspector-installer.sh"));
+  expect(step).toContain("/releases/download/v0.1.0/");
+  expect(r.yaml).not.toContain("jsspector-installer.sh");
+});
+
+it("js_security=false drops JSSpector", () => {
+  const r = rec("node_pnpm", { js_security: false });
+  expect(ids(r)).not.toContain("jsspector");
+  expect(r.install.some((s) => s.includes("jsspector"))).toBe(false);
+});
+
+it("python repos are not asked about JSSpector", () => {
+  expect(rec("py_docker").questions.map((q) => q.pref)).not.toContain("js_security");
+});
+
 it("explicit prefs are applied and persisted in the header", () => {
   const r = rec("py_docker", { formatter: "black", dead_code: "true" });
   expect(ids(r)).toContain("black_check");
   expect(ids(r)).toContain("vulture");
   expect(ids(r)).not.toContain("ruff_format");
-  expect(r.header).toBe("# satori:recommended v3 python/uv prefs: formatter=black dead_code=true");
+  expect(r.header).toBe("# satori:recommended v4 python/uv prefs: formatter=black dead_code=true");
   expect(new Set(r.questions.map((q) => q.pref))).toEqual(new Set(["types", "security"]));
 });
 
@@ -284,7 +306,8 @@ it("no supported project is an error", () => {
 
 it("node without a lockfile uses a plain install", () => {
   const r = rec("node_npm_nolock");
-  expect(r.install).toEqual(["npm install"]);
+  expect(r.install[0]).toBe("npm install");
+  expect(r.install.some((s) => s.startsWith("npm ci"))).toBe(false);
   expect(ids(r)).not.toContain("node_tests");
 });
 
@@ -339,7 +362,7 @@ describe("recommend_playbook tool", () => {
     const existing = await recommendPlaybook({ directory: join(FIXTURES, "py_updated") });
     expect(existing.existing).toBe(true);
     expect(existing).not.toHaveProperty("playbook_yaml");
-    expect(existing.header.startsWith("# satori:recommended v3")).toBe(true);
+    expect(existing.header.startsWith("# satori:recommended v4")).toBe(true);
     expect(existing).not.toHaveProperty("needs_ci_import");
     expect(existing).not.toHaveProperty("migrate_from_ci");
     expect(existing.ci_install_missing).toEqual(["uv sync --all-groups"]);

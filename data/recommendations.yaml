@@ -1,11 +1,11 @@
 # Rules for the `recommend_playbook` MCP tool. Adding a tool = one entry here + a fixture
-# under tests/fixtures/. Detection and playbook assembly live in recommend.py; this file
-# only references the closed vocabulary of predicates defined there.
+# in test/recommend.test.ts. Detection and playbook assembly live in src/recommend.ts; this
+# file only references the closed vocabulary of predicates defined there.
 #
 # Bump `rules_version` whenever tools are added; give each new tool `since: <that version>`
 # so repos already on an older recommendation are only asked about what is new.
 
-rules_version: 3
+rules_version: 4
 
 # User-facing preferences. `choice` prefs pick one tool among several; `bool` prefs turn an
 # optional tool on or off. A pref is only asked when the repo does not already settle it.
@@ -31,6 +31,11 @@ prefs:
     type: bool
     default: true
     question: "Add pyspector security scanning?"
+  js_security:
+    language: node
+    type: bool
+    default: true
+    question: "Add JSSpector security scanning (JavaScript/TypeScript SAST)?"
 
 # How each language/package manager prepares the environment and runs tools.
 #   image     playbook `settings.image` (used by remote runs; on the LLM playbook)
@@ -39,6 +44,8 @@ prefs:
 #   run       prefix for tools that live in the project environment
 #   exec      prefix for tools fetched on demand (python-tool kind uses `--from`)
 #   tool_install / tool   CI install step and run prefix for `kind: tool` entries
+#             (a tool's own `install` overrides `tool_install`, for tools that are not
+#             installed through the language's package manager)
 profiles:
   python:
     uv:
@@ -318,6 +325,24 @@ tools:
     severity: 4
     since: 1
     why: "Known-vulnerable dependencies; JSON output is parsed into findings."
+
+  - id: jsspector
+    language: node
+    category: security
+    kind: tool
+    package: jsspector
+    version: "0.1.0"
+    install: >-
+      apt-get update && apt-get install -y --no-install-recommends ca-certificates curl xz-utils
+      && curl --proto '=https' --tlsv1.2 -LsSf
+      https://github.com/satoridev01/JSSpector/releases/download/v{version}/jsspector-installer.sh | sh
+    command: 'PATH="$HOME/.cargo/bin:$PATH" jsspector scan -f json .'
+    pref: js_security
+    configured_by: []
+    blocking_if_present: false
+    severity: 4
+    since: 4
+    why: "JavaScript/TypeScript SAST (https://github.com/satoridev01/JSSpector); JSON output is parsed into findings."
 
   # -------------------------------------------------------------------- go
   - id: go_vet
