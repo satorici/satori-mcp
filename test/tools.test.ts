@@ -1256,7 +1256,9 @@ it("auth errors become a login hint", async () => {
   mockClient("get", () => {
     throw new AuthError("Login required");
   });
-  expect((await tools.whoami()).error).toBe("Not logged in. Run: satori-v2 config token <token>");
+  expect((await tools.whoami()).error).toBe(
+    "Not logged in. Run: npx -y github:satorici/satori-mcp login (or set SATORI_TOKEN)",
+  );
 });
 
 describe("whoami", () => {

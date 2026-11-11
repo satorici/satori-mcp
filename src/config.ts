@@ -3,7 +3,7 @@
  * `SATORI_*` env vars (prefix stripped, lowercased). Profile: `default`, `--profile X` in argv,
  * or `SATORI_PROFILE`.
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parse, stringify } from "yaml";
@@ -61,11 +61,15 @@ export class Config {
     this.profile = (this.env.profile as string | undefined) ?? profileFromArgv(argv) ?? "default";
   }
 
-  /** Like the CLI's `config.save`: set `key` in the active profile of the credentials file. */
+  /**
+   * Like the CLI's `config.save`: set `key` in the active profile of the credentials file,
+   * which only its owner can read.
+   */
   save(key: string, value: unknown): void {
     const file = readFile(this.configFile);
     file[this.profile] = { ...(isDict(file[this.profile]) ? (file[this.profile] as Dict) : {}), [key]: value };
-    writeFileSync(this.configFile, stringify(file));
+    writeFileSync(this.configFile, stringify(file), { mode: 0o600 });
+    chmodSync(this.configFile, 0o600);
     this.file = file;
   }
 

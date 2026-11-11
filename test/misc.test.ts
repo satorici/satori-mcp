@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { unzipSync } from "fflate";
@@ -8,6 +8,7 @@ import { ApiClient, buildQuery } from "../src/api.js";
 import { dumpFileUris, makeBundle } from "../src/bundle.js";
 import { Config, config } from "../src/config.js";
 import { SatoriError } from "../src/errors.js";
+import { login } from "../src/login.js";
 import { CLONE_ATTEMPTS, cloneRepo, gitDeps, originRepository } from "../src/git.js";
 import { runTestFilter } from "../src/outputs.js";
 import { pyRepr, pyTuple, splitLines } from "../src/pyrepr.js";
@@ -180,6 +181,18 @@ describe("config", () => {
     expect(new Config({}, [], file).get("organization")).toBe(3);
   });
 
+  it("keeps the credentials file readable by its owner only", () => {
+    const dir = mkdtempSync(join(tmpdir(), "satori-config-"));
+    const created = join(dir, "new.yml");
+    new Config({}, [], created).save("token", "t");
+    expect(statSync(created).mode & 0o777).toBe(0o600);
+
+    const existing = join(dir, "old.yml");
+    writeFileSync(existing, "default:\n  token: d\n", { mode: 0o644 });
+    new Config({}, [], existing).save("organization", 7);
+    expect(statSync(existing).mode & 0o777).toBe(0o600);
+  });
+
   it("reports env overrides", () => {
     expect(new Config({ SATORI_ORGANIZATION: "9" }, [], "/nonexistent").envOverrides("organization")).toBe(true);
     expect(new Config({}, [], "/nonexistent").envOverrides("organization")).toBe(false);
@@ -225,5 +238,73 @@ describe("helpers", () => {
     expect(isGithubRepo("nope")).toBe(false);
     expect(wildcardOwner("octo/*")).toBe("octo");
     expect(wildcardOwner("octo/repo")).toBeNull();
+  });
+});
+
+describe("login", () => {
+  const TOKEN = "secret-token-123";
+
+  function setup(options: { status?: number; body?: unknown; env?: NodeJS.ProcessEnv; argv?: string[]; typed?: string } = {}) {
+    const file = join(mkdtempSync(join(tmpdir(), "satori-login-")), "creds.yml");
+    const output: string[] = [];
+    const requests: { url: string; authorization: string }[] = [];
+    const deps = {
+      readToken: async () => options.typed ?? TOKEN,
+      write: (text: string) => void output.push(text),
+      config: new Config(options.env ?? {}, options.argv ?? [], file),
+      fetch: (async (url: string, init: RequestInit) => {
+        requests.push({ url, authorization: (init.headers as Record<string, string>).Authorization });
+        return new Response(JSON.stringify(options.body ?? { profile: { name: "Ada" } }), {
+          status: options.status ?? 200,
+        });
+      }) as unknown as typeof fetch,
+    };
+    return { file, deps, requests, text: () => output.join("") };
+  }
+
+  it("checks the token, saves it and never prints it", async () => {
+    const { file, deps, requests, text } = setup();
+    expect(await login(deps)).toBe(0);
+    expect(requests).toEqual([{ url: expect.stringMatching(/\/settings$/), authorization: `Bearer ${TOKEN}` }]);
+    expect(parse(readFileSync(file, "utf-8"))).toEqual({ default: { token: TOKEN } });
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(text()).toBe("Logged in as Ada (profile default).\n");
+  });
+
+  it("saves to the selected profile and keeps the others", async () => {
+    const { file, deps } = setup({ argv: ["node", "x", "login", "--profile", "work"] });
+    writeFileSync(file, "default:\n  token: d\n");
+    expect(await login(deps)).toBe(0);
+    expect(parse(readFileSync(file, "utf-8"))).toEqual({ default: { token: "d" }, work: { token: TOKEN } });
+  });
+
+  it("saves nothing when the API rejects the token", async () => {
+    const { file, deps, text } = setup({ status: 401 });
+    expect(await login(deps)).toBe(1);
+    expect(existsSync(file)).toBe(false);
+    expect(text()).toBe("Token rejected. Nothing was saved.\n");
+  });
+
+  it("saves nothing when the API cannot be reached", async () => {
+    const { file, deps, text } = setup();
+    deps.fetch = (async () => {
+      throw new TypeError("fetch failed");
+    }) as unknown as typeof fetch;
+    expect(await login(deps)).toBe(1);
+    expect(existsSync(file)).toBe(false);
+    expect(text()).toContain("failed to connect");
+  });
+
+  it("asks nothing of the API when no token is given", async () => {
+    const { file, deps, requests } = setup({ typed: "" });
+    expect(await login(deps)).toBe(1);
+    expect(requests).toEqual([]);
+    expect(existsSync(file)).toBe(false);
+  });
+
+  it("warns when SATORI_TOKEN overrides the saved token", async () => {
+    const { deps, text } = setup({ env: { SATORI_TOKEN: "other" } });
+    expect(await login(deps)).toBe(0);
+    expect(text()).toContain("SATORI_TOKEN is set and overrides the saved token");
   });
 });

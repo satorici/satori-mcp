@@ -11,6 +11,13 @@ Run it straight from GitHub (npm clones the repo and builds it through the `prep
 npx -y github:satorici/satori-mcp
 ```
 
+Save your API token once (hidden prompt, or piped on stdin); the token is checked against the
+API and stored in `~/.satori_credentials.yml`:
+
+```sh
+npx -y github:satorici/satori-mcp login
+```
+
 MCP client config:
 
 ```json
@@ -34,7 +41,7 @@ pnpm test             # vitest
 Local build config: `{"command": "node", "args": ["/path/to/satori-mcp/dist/index.js"]}`.
 
 Credentials are shared with the CLI: `~/.satori_credentials.yml` profiles (`--profile X` or
-`SATORI_PROFILE`), overridden by `SATORI_*` env vars (e.g. `SATORI_TOKEN`). Endpoints:
+`SATORI_PROFILE`), written by `login` or by `satori-v2 config token`, and overridden by `SATORI_*` env vars (e.g. `SATORI_TOKEN`). Endpoints:
 `SATORI_ENDPOINT`, `SATORI_PLAYBOOKS_ENDPOINT`, `SATORI_DASHBOARD_URL`, `SATORI_DOCS_URL`.
 Requests act on the profile's `organization` (`satori-v2 organization ID use`) or
 `SATORI_ORGANIZATION`, sent as `X-Satori-Organization`; your own account if unset.
@@ -48,6 +55,7 @@ Requests act on the profile's `organization` (`satori-v2 organization ID use`) o
 | `src/shaping.ts` | Caps and summaries applied to every response |
 | `src/recommend.ts` + `data/recommendations.yaml` | `recommend_playbook` stack detection and rules |
 | `src/local/` | `run_local` engine: recipe runner, result substitution, upload |
+| `src/login.ts` | The `login` command: check a token and save it |
 | `src/api.ts`, `src/config.ts`, `src/bundle.ts`, `src/git.ts` | API client, CLI-compatible config, playbook bundles, shallow clones |
 
 stdout is the protocol channel: nothing may print to it.

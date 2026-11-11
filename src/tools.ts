@@ -15,6 +15,7 @@ import { makeBundle, uploadBundle } from "./bundle.js";
 import { config } from "./config.js";
 import { advisoryUrl, DOCS_URL, reportUrl } from "./constants.js";
 import { ApiTimeoutError, AuthError, HttpStatusError, SatoriError } from "./errors.js";
+import { LOGIN_COMMAND } from "./login.js";
 import { cloneRepo, originRepository, requireGit } from "./git.js";
 import { runLocalJob } from "./local/localRun.js";
 import { loadExecutionOutputs, runTestFilter } from "./outputs.js";
@@ -83,7 +84,7 @@ export const PUBLISH_ADVISORY_409_HINT =
   "Conflict: advisory may already be published, or no GitHub PAT is configured in Settings.";
 
 export function errorResult(e: unknown): Dict | null {
-  if (e instanceof AuthError) return { error: "Not logged in. Run: satori-v2 config token <token>" };
+  if (e instanceof AuthError) return { error: `Not logged in. Run: ${LOGIN_COMMAND} (or set SATORI_TOKEN)` };
   if (e instanceof HttpStatusError) {
     const result: Dict = { error: shaping.clip(e.text, 2000), status: e.status };
     if (e.status === 403) result.hint = "This action needs a PRO or ENTERPRISE plan.";
