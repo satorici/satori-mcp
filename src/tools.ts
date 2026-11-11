@@ -114,10 +114,22 @@ export function safe<A extends unknown[]>(fn: (...args: A) => Promise<Dict>): (.
 
 export const whoami = safe(async (): Promise<Dict> => {
   const settings = await client.get("/settings");
+  const organization = activeOrganization();
+  let organizationName: string | null = null;
+  if (organization) {
+    try {
+      organizationName = (await client.get(`/organizations/${organization}`)).name ?? null;
+    } catch (e) {
+      if (!(e instanceof HttpStatusError)) throw e;
+    }
+  }
   return {
     profile: config.profile,
     endpoint: client.baseUrl,
-    organization: activeOrganization(),
+    name: (settings.profile ?? {}).name ?? null,
+    email: (settings.profile ?? {}).email ?? null,
+    organization,
+    organization_name: organizationName,
     notify_email: (settings.notify ?? {}).email ?? null,
     github_pat_configured: ((settings.github ?? {}).token ?? {}).configured ?? null,
   };

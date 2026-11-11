@@ -1259,6 +1259,31 @@ it("auth errors become a login hint", async () => {
   expect((await tools.whoami()).error).toBe("Not logged in. Run: satori-v2 config token <token>");
 });
 
+describe("whoami", () => {
+  const settings = { profile: { name: "Ada", email: "ada@x.io" }, notify: {}, github: { token: { configured: true } } };
+
+  it("returns the name, email and active organization name", async () => {
+    vi.spyOn(config, "get").mockImplementation((key) => (key === "organization" ? 7 : undefined));
+    mockClient("get", (url) => (url === "/organizations/7" ? { id: 7, name: "Acme" } : settings));
+    expect(await tools.whoami()).toMatchObject({
+      name: "Ada",
+      email: "ada@x.io",
+      organization: "7",
+      organization_name: "Acme",
+    });
+  });
+
+  it("keeps whoami working when the organization lookup fails", async () => {
+    const { HttpStatusError } = await import("../src/errors.js");
+    vi.spyOn(config, "get").mockImplementation((key) => (key === "organization" ? 7 : undefined));
+    mockClient("get", (url) => {
+      if (url === "/organizations/7") throw new HttpStatusError(403, "forbidden", url);
+      return settings;
+    });
+    expect(await tools.whoami()).toMatchObject({ organization: "7", organization_name: null });
+  });
+});
+
 describe("organizations", () => {
   it("lists organizations with the active one", async () => {
     vi.spyOn(config, "get").mockImplementation((key) => (key === "organization" ? 7 : undefined));
