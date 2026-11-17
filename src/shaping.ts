@@ -326,6 +326,13 @@ export function summarizeAdvisory(advisory: Dict): Dict {
     finding_id: advisory.finding_id ?? null,
     execution_id: advisory.execution_id ?? null,
     created_at: advisory.created_at ?? null,
+    // GitHub's side as of the last sync; all null for a draft or a report never synced
+    reported_at: advisory.reported_at ?? null,
+    remote_state: advisory.remote_state ?? null,
+    last_comment_at: advisory.last_comment_at ?? null,
+    last_comment_by: advisory.last_comment_by ?? null,
+    last_word: advisory.last_word ?? null,
+    remote_synced_at: advisory.remote_synced_at ?? null,
   };
 }
 

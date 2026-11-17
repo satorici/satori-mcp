@@ -565,13 +565,25 @@ Run one with run_playbook/scan_repository(playbook_uri=...); read details with g
 
 kind: SECURITY_ADVISORY or ISSUE. provider: GITHUB. order: ASC or DESC.
 Optional finding_id or execution_id filters. Returns titles and links (external_url),
-not the full advisory text; use get_advisory for details.`,
+not the full advisory text; use get_advisory for details.
+
+Each row carries GitHub's side as of the last sync: remote_state, reported_at,
+last_comment_at / last_comment_by and last_word (REPORTER = we commented last, OTHER = someone
+else did, null = no comments). reported=true lists the published ones, false the drafts.
+remote_state (e.g. triage, closed, open), last_word (REPORTER, OTHER or NONE) and
+order_by (created_at, reported_at, last_comment_at) work on those fields: the reports waiting
+on us are reported=true with last_word=OTHER. The sync runs when the dashboard's issues page
+is opened; get_advisory_status refreshes one.`,
     {
       execution_id: optPublicId(),
       finding_id: optPublicId(),
       kind: optStr(),
       provider: optStr(),
       order: optStr(),
+      reported: z.boolean().nullish(),
+      remote_state: optStr(),
+      last_word: optStr(),
+      order_by: optStr(),
       ...paging(),
     },
     (args) => tools.listAdvisories(args),
@@ -623,10 +635,10 @@ Returns external_url on success.`,
 
   tool(
     "get_advisory_status",
-    `Live remote GitHub status for a published security advisory (e.g. triage).
+    `Live GitHub state of a published report, advisory or issue (e.g. triage, closed, open).
 
 Needs a GitHub PAT in Settings. advisory_id from get_advisory / list_advisories.
-The state is not stored locally.`,
+Also stores the state and the last comment, so list_advisories and get_advisory show them.`,
     { advisory_id: publicId() },
     (args) => tools.getAdvisoryStatus(args),
   );

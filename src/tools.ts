@@ -48,6 +48,8 @@ export const FINDING_SOURCES = ["ASSERT", "TOOL"];
 export const ORDERS = ["ASC", "DESC"];
 export const ADVISORY_KINDS = ["SECURITY_ADVISORY", "ISSUE"];
 export const ADVISORY_PROVIDERS = ["GITHUB"];
+export const ADVISORY_LAST_WORDS = ["REPORTER", "OTHER", "NONE"];
+export const ADVISORY_ORDER_BY = ["created_at", "reported_at", "last_comment_at"];
 export const MAX_SCAN_QUANTITY = 10;
 export const LOCAL_DEFAULT_TIMEOUT = 300;
 export const LOCAL_MAX_TIMEOUT = 3600;
@@ -1273,6 +1275,10 @@ export interface ListAdvisoriesArgs {
   kind?: string | null;
   provider?: string | null;
   order?: string | null;
+  reported?: boolean | null;
+  remote_state?: string | null;
+  last_word?: string | null;
+  order_by?: string | null;
   quantity?: number;
   page?: number;
 }
@@ -1284,6 +1290,10 @@ export const listAdvisories = safe(async (args: ListAdvisoriesArgs = {}): Promis
   const order = args.order ? args.order.toUpperCase() : null;
   if (kind && !ADVISORY_KINDS.includes(kind)) return oneOf("kind", ADVISORY_KINDS);
   if (provider && !ADVISORY_PROVIDERS.includes(provider)) return oneOf("provider", ADVISORY_PROVIDERS);
+  const lastWord = args.last_word ? args.last_word.toUpperCase() : null;
+  const orderBy = args.order_by ? args.order_by.toLowerCase() : null;
+  if (lastWord && !ADVISORY_LAST_WORDS.includes(lastWord)) return oneOf("last_word", ADVISORY_LAST_WORDS);
+  if (orderBy && !ADVISORY_ORDER_BY.includes(orderBy)) return oneOf("order_by", ADVISORY_ORDER_BY);
   if (order && !ORDERS.includes(order)) return oneOf("order", ORDERS);
   const quantity = clamp(args.quantity ?? 25, 1, 25);
   const params: Dict = { quantity, page };
@@ -1293,6 +1303,10 @@ export const listAdvisories = safe(async (args: ListAdvisoriesArgs = {}): Promis
     kind,
     provider,
     order,
+    reported: args.reported,
+    remote_state: args.remote_state ? args.remote_state.toLowerCase() : null,
+    last_word: lastWord,
+    order_by: orderBy,
   };
   for (const [k, v] of Object.entries(optional)) if (v !== null && v !== undefined) params[k] = v;
   const data = await client.get("/external_issues", params);

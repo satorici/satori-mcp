@@ -1060,6 +1060,37 @@ it("list_advisories validates and omits long text", async () => {
   expect((await tools.listAdvisories({ kind: "PR" })).error).toContain("kind must be");
 });
 
+it("list_advisories filters by the tracking fields and returns them", async () => {
+  const seen: any = {};
+  mockClient("get", (_url, params) => {
+    Object.assign(seen, params);
+    return {
+      total: 1,
+      items: [{ id: pid(1), remote_state: "triage", last_word: "OTHER", last_comment_by: "maintainer" }],
+    };
+  });
+  const result = await tools.listAdvisories({
+    reported: true,
+    remote_state: "Triage",
+    last_word: "other",
+    order_by: "LAST_COMMENT_AT",
+  });
+  expect(seen).toMatchObject({
+    reported: true,
+    remote_state: "triage",
+    last_word: "OTHER",
+    order_by: "last_comment_at",
+  });
+  expect(result.items[0]).toMatchObject({
+    remote_state: "triage",
+    last_word: "OTHER",
+    last_comment_by: "maintainer",
+    reported_at: null,
+  });
+  expect((await tools.listAdvisories({ last_word: "me" })).error).toContain("last_word must be");
+  expect((await tools.listAdvisories({ order_by: "title" })).error).toContain("order_by must be");
+});
+
 describe("security advisories", () => {
   const draft = {
     id: pid(42),
