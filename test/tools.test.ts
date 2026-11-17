@@ -1024,6 +1024,38 @@ describe("list_findings", () => {
     expect((await tools.listFindings({ exploitability: "yes" })).error).toContain("exploitability must be");
   });
 
+  it("lists the findings left to report with their repository", async () => {
+    const seen: any = {};
+    mockClient("get", (_url, params) => {
+      Object.assign(seen, params);
+      return {
+        total: 2,
+        items: [
+          { id: pid(1), title: "t", repository: "o/r", external_issues: [{ id: pid(5), external_id: null }] },
+          { id: pid(2), title: "u", repository: "o/r", external_issues: [{ id: pid(6), external_id: "12" }] },
+        ],
+      };
+    });
+    const result = await tools.listFindings({ reported: false, public_repository: true });
+    expect(seen.reported).toBe(false);
+    expect(seen.public_repository).toBe(true);
+    expect(result.items.map((item: any) => [item.repository, item.reported])).toEqual([
+      ["o/r", false],
+      ["o/r", true],
+    ]);
+  });
+
+  it("sends no report filters unless asked", async () => {
+    const seen: any = {};
+    mockClient("get", (_url, params) => {
+      Object.assign(seen, params);
+      return { total: 0, items: [] };
+    });
+    await tools.listFindings({ reported: null });
+    expect(seen).not.toHaveProperty("reported");
+    expect(seen).not.toHaveProperty("public_repository");
+  });
+
   it("accepts severity names", async () => {
     const seen: any = {};
     mockClient("get", (_url, params) => {
@@ -1274,6 +1306,30 @@ describe("security advisories", () => {
     const result = await tools.publishIssue({ finding_id: pid(7) });
     expect(result.status).toBe(409);
     expect(result.hint).toBe(tools.PUBLISH_ADVISORY_409_HINT);
+  });
+
+  it.each([
+    ["SECURITY_ADVISORY", "security advisory"],
+    ["ISSUE", "public GitHub issue"],
+  ])("publish_report publishes through the repository's channel and says it was %s", async (kind, hint) => {
+    mockClient("post", () => draft);
+    const request = mockClient("request", (method, path, options) => {
+      expect([method, path]).toEqual(["POST", "/external_issues/publish"]);
+      expect(options?.json).toEqual({ finding_id: pid(7) });
+      return { json: async () => ({ ...draft, kind, external_id: "1", external_url: "https://github.com/o/r/1" }) };
+    });
+    const result = await tools.publishReport({ finding_id: pid(7) });
+    expect(request).toHaveBeenCalledOnce();
+    expect(result.external_url).toBe("https://github.com/o/r/1");
+    expect(result.hint).toContain(hint);
+  });
+
+  it("get_report_channel asks how the repository takes a report", async () => {
+    const channel = { repository: "o/r", private_vulnerability_reporting: false, channel: "ISSUE" };
+    const get = mockClient("get", () => channel);
+    const result = await tools.getReportChannel({ finding_id: pid(7) });
+    expect(get).toHaveBeenCalledWith("/external_issues/report-channel", { finding_id: pid(7) });
+    expect(result).toEqual(channel);
   });
 
   it("get_advisory_status returns remote status", async () => {

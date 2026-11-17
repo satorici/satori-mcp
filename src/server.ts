@@ -20,8 +20,9 @@ export const INSTRUCTIONS =
   "analyze_finding / analyze_execution queue server-side AI analysis with the account's AI key " +
   "(only when asked); get_finding_ai_analysis reads the latest. suggested_status is advisory — " +
   "do not call update_finding_status unless the user asked to triage. " +
-  "create_security_advisory / publish_security_advisory / publish_issue / update_advisory / update_advisory_visibility / " +
-  "delete_security_advisory only when asked; get_advisory and get_advisory_status are read-only. " +
+  "create_security_advisory / publish_security_advisory / publish_issue / publish_report / update_advisory / " +
+  "update_advisory_visibility / delete_security_advisory only when asked; get_advisory, get_advisory_status " +
+  "and get_report_channel are read-only. publish_report picks advisory or issue for the repository. " +
   "delete_job / delete_execution / delete_executions only when asked (jobs must be CANCELED or FINISHED). " +
   "update_execution_visibility changes a report's visibility (only when asked). " +
   "list_playbooks/get_playbook browse ready-made catalog playbooks (use via " +
@@ -278,7 +279,11 @@ Use offset_from_end (from next_offset_from_end) to page backwards.`,
 status: OPEN, INVESTIGATING, TP, FIXED, FP, ACCEPTED.
 exploitability: UNKNOWN, EXPLOITABLE, NOT_EXPLOITABLE, INCONCLUSIVE.
 source: ASSERT (playbook assertion failures) or TOOL (findings parsed from tool output).
-order: ASC or DESC by creation time.`,
+order: ASC or DESC by creation time.
+reported: true lists the findings with a report published to GitHub (advisory or issue), false
+the ones without. public_repository: true leaves out the known private repositories, false
+lists only those. Each row carries its repository and reported. The findings left to report
+are exploitability=EXPLOITABLE with reported=false and public_repository=true.`,
     {
       execution_id: optPublicId(),
       severity: z.array(z.union([int(), z.string()])).nullish(),
@@ -286,6 +291,8 @@ order: ASC or DESC by creation time.`,
       exploitability: optStr(),
       source: optStr(),
       order: optStr(),
+      reported: z.boolean().nullish(),
+      public_repository: z.boolean().nullish(),
       ...paging(),
     },
     (args) => tools.listFindings(args),
@@ -631,6 +638,30 @@ draft when the finding has none. A finding is published once, as an advisory or 
 Returns external_url on success.`,
     { finding_id: publicId() },
     (args) => tools.publishIssue(args),
+  );
+
+  tool(
+    "publish_report",
+    `Report a finding to GitHub through the channel its repository takes (PRO/ENTERPRISE; needs
+GitHub PAT in Settings).
+
+Only when the user asked to publish. A security advisory when the repository accepts private
+vulnerability reports (the draft needs its severity and CVSS vector, as in
+publish_security_advisory), else a PUBLIC issue as in publish_issue. Uses finding_id; creates
+the draft when the finding has none. kind in the result says which one was used
+(SECURITY_ADVISORY or ISSUE). Returns external_url on success.`,
+    { finding_id: publicId() },
+    (args) => tools.publishReport(args),
+  );
+
+  tool(
+    "get_report_channel",
+    `How a finding's repository takes a report, without publishing (needs GitHub PAT in Settings).
+
+channel is SECURITY_ADVISORY when the repository accepts private vulnerability reports
+(private_vulnerability_reporting=true), else ISSUE. Asked to GitHub on every call.`,
+    { finding_id: publicId() },
+    (args) => tools.getReportChannel(args),
   );
 
   tool(

@@ -645,6 +645,8 @@ export interface ListFindingsArgs {
   exploitability?: string | null;
   source?: string | null;
   order?: string | null;
+  reported?: boolean | null;
+  public_repository?: boolean | null;
   quantity?: number;
   page?: number;
 }
@@ -675,8 +677,16 @@ export const listFindings = safe(async (args: ListFindingsArgs = {}): Promise<Di
   if (exploitability) params.exploitability = exploitability;
   if (source) params.source = source;
   if (order) params.order = order;
+  if (typeof args.reported === "boolean") params.reported = args.reported;
+  if (typeof args.public_repository === "boolean") params.public_repository = args.public_repository;
   const data = await client.get("/findings", params);
-  return shaping.paged(data.items.map(shaping.summarizeFinding), data.total, page, quantity);
+  const items = data.items.map((finding: Dict) => ({
+    ...shaping.summarizeFinding(finding),
+    repository: finding.repository ?? null,
+    // A draft has no external_id yet
+    reported: ((finding.external_issues as Dict[] | undefined) ?? []).some((issue) => issue.external_id != null),
+  }));
+  return shaping.paged(items, data.total, page, quantity);
 });
 
 export const getFinding = safe(
@@ -1388,7 +1398,12 @@ export const publishSecurityAdvisory = safe(async ({ finding_id: findingId }: { 
   }
 });
 
-export const publishIssue = safe(async ({ finding_id: findingId }: { finding_id: string }): Promise<Dict> => {
+const ISSUE_HINT =
+  "Published as a public GitHub issue (external_url). It only links to the report on Satori; the details are not in the issue.";
+const ADVISORY_HINT = "Published to GitHub as a security advisory (external_url).";
+
+/** Publish the finding's report through `path`, creating its draft first. */
+async function publishDraft(findingId: string, path: string): Promise<Dict> {
   const body = { finding_id: findingId };
   try {
     try {
@@ -1397,13 +1412,10 @@ export const publishIssue = safe(async ({ finding_id: findingId }: { finding_id:
       // 409: the finding already has its draft
       if (!(e instanceof HttpStatusError) || e.status !== 409) throw e;
     }
-    const response = await client.request("POST", "/external_issues/issue/publish", {
-      json: body,
-      timeoutMs: PUBLISH_ADVISORY_TIMEOUT_MS,
-    });
-    const result = shapeAdvisoryDetail((await response.json()) as Dict);
-    result.hint =
-      "Published as a public GitHub issue (external_url). It only links to the report on Satori; the details are not in the issue.";
+    const response = await client.request("POST", path, { json: body, timeoutMs: PUBLISH_ADVISORY_TIMEOUT_MS });
+    const advisory = (await response.json()) as Dict;
+    const result = shapeAdvisoryDetail(advisory);
+    result.hint = advisory.kind === "ISSUE" ? ISSUE_HINT : ADVISORY_HINT;
     return result;
   } catch (e) {
     const result = errorResult(e);
@@ -1411,7 +1423,22 @@ export const publishIssue = safe(async ({ finding_id: findingId }: { finding_id:
     if (result.status === 409) result.hint = PUBLISH_ADVISORY_409_HINT;
     return result;
   }
-});
+}
+
+export const publishIssue = safe(
+  ({ finding_id: findingId }: { finding_id: string }): Promise<Dict> =>
+    publishDraft(findingId, "/external_issues/issue/publish"),
+);
+
+export const publishReport = safe(
+  ({ finding_id: findingId }: { finding_id: string }): Promise<Dict> =>
+    publishDraft(findingId, "/external_issues/publish"),
+);
+
+export const getReportChannel = safe(
+  ({ finding_id: findingId }: { finding_id: string }): Promise<Dict> =>
+    client.get("/external_issues/report-channel", { finding_id: findingId }),
+);
 
 export const getAdvisoryStatus = safe(async ({ advisory_id: id }: { advisory_id: string }): Promise<Dict> => {
   const data = await client.get(`/external_issues/${id}/status`);
