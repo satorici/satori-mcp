@@ -281,8 +281,10 @@ exploitability: UNKNOWN, EXPLOITABLE, NOT_EXPLOITABLE, INCONCLUSIVE.
 source: ASSERT (playbook assertion failures) or TOOL (findings parsed from tool output).
 order: ASC or DESC by creation time.
 reported: true lists the findings with a report published to GitHub (advisory or issue), false
-the ones without. public_repository: true leaves out the known private repositories, false
-lists only those. Each row carries its repository and reported. The findings left to report
+the ones without. public_repository: true lists the findings with a repository that is not a
+known private one (a cloud scan has no repository, so it is left out), false only the known
+private ones. The list is the active organization's, or only the caller's own findings on a
+personal account. Each row carries its repository and reported. The findings left to report
 are exploitability=EXPLOITABLE with reported=false and public_repository=true.`,
     {
       execution_id: optPublicId(),
