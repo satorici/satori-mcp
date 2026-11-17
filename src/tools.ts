@@ -1307,7 +1307,6 @@ function shapeAdvisoryDetail(advisory: Dict, fullDescription = false): Dict {
 async function findSecurityAdvisoryForFinding(findingId: string): Promise<Dict | null> {
   const data = await client.get("/external_issues", {
     finding_id: findingId,
-    kind: "SECURITY_ADVISORY",
     quantity: 1,
   });
   return data.items?.[0] ?? null;
@@ -1366,6 +1365,31 @@ export const publishSecurityAdvisory = safe(async ({ finding_id: findingId }: { 
     if (advisory.external_url) {
       result.hint = "Published to GitHub. external_url is the remote advisory link.";
     }
+    return result;
+  } catch (e) {
+    const result = errorResult(e);
+    if (result === null) throw e;
+    if (result.status === 409) result.hint = PUBLISH_ADVISORY_409_HINT;
+    return result;
+  }
+});
+
+export const publishIssue = safe(async ({ finding_id: findingId }: { finding_id: string }): Promise<Dict> => {
+  const body = { finding_id: findingId };
+  try {
+    try {
+      await client.post("/external_issues/security_advisory", body);
+    } catch (e) {
+      // 409: the finding already has its draft
+      if (!(e instanceof HttpStatusError) || e.status !== 409) throw e;
+    }
+    const response = await client.request("POST", "/external_issues/issue/publish", {
+      json: body,
+      timeoutMs: PUBLISH_ADVISORY_TIMEOUT_MS,
+    });
+    const result = shapeAdvisoryDetail((await response.json()) as Dict);
+    result.hint =
+      "Published as a public GitHub issue (external_url). It only links to the report on Satori; the details are not in the issue.";
     return result;
   } catch (e) {
     const result = errorResult(e);

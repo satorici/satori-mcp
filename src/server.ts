@@ -20,7 +20,7 @@ export const INSTRUCTIONS =
   "analyze_finding / analyze_execution queue server-side AI analysis with the account's AI key " +
   "(only when asked); get_finding_ai_analysis reads the latest. suggested_status is advisory — " +
   "do not call update_finding_status unless the user asked to triage. " +
-  "create_security_advisory / publish_security_advisory / update_advisory / update_advisory_visibility / " +
+  "create_security_advisory / publish_security_advisory / publish_issue / update_advisory / update_advisory_visibility / " +
   "delete_security_advisory only when asked; get_advisory and get_advisory_status are read-only. " +
   "delete_job / delete_execution / delete_executions only when asked (jobs must be CANCELED or FINISHED). " +
   "update_execution_visibility changes a report's visibility (only when asked). " +
@@ -606,6 +606,19 @@ Only when the user asked to publish. Uses finding_id (not advisory_id). Requires
 prior create_security_advisory draft. Returns external_url on success.`,
     { finding_id: publicId() },
     (args) => tools.publishSecurityAdvisory(args),
+  );
+
+  tool(
+    "publish_issue",
+    `Report a finding through a PUBLIC GitHub issue (PRO/ENTERPRISE; needs GitHub PAT in Settings).
+
+Only when the user asked to publish it as an issue. For repositories without private
+vulnerability reporting: the issue only says there is a security problem and links to the
+report on Satori, which becomes UNLISTED if it was PRIVATE. Uses finding_id; creates the
+draft when the finding has none. A finding is published once, as an advisory or as an issue.
+Returns external_url on success.`,
+    { finding_id: publicId() },
+    (args) => tools.publishIssue(args),
   );
 
   tool(

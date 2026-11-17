@@ -1150,7 +1150,7 @@ describe("security advisories", () => {
     });
     mockClient("get", (url, params) => {
       expect(url).toBe("/external_issues");
-      expect(params).toMatchObject({ finding_id: pid(7), kind: "SECURITY_ADVISORY" });
+      expect(params).toEqual({ finding_id: pid(7), quantity: 1 });
       return { total: 1, items: [{ ...draft, external_id: "GHSA-x" }] };
     });
     const result = await tools.createSecurityAdvisory({ finding_id: pid(7) });
@@ -1194,6 +1194,53 @@ describe("security advisories", () => {
       throw new HttpStatusError(409, "already published", "http://x");
     });
     const result = await tools.publishSecurityAdvisory({ finding_id: pid(7) });
+    expect(result.status).toBe(409);
+    expect(result.hint).toBe(tools.PUBLISH_ADVISORY_409_HINT);
+  });
+
+  const mockPublishIssue = () =>
+    mockClient("request", (method, path, options) => {
+      expect([method, path]).toEqual(["POST", "/external_issues/issue/publish"]);
+      expect(options?.json).toEqual({ finding_id: pid(7) });
+      return {
+        json: async () => ({
+          ...draft,
+          kind: "ISSUE",
+          external_id: "12",
+          external_url: "https://github.com/o/r/issues/12",
+        }),
+      };
+    });
+
+  it("publish_issue creates the draft and publishes it as a public issue", async () => {
+    const post = mockClient("post", (url, body) => {
+      expect(url).toBe("/external_issues/security_advisory");
+      expect(body).toEqual({ finding_id: pid(7) });
+      return draft;
+    });
+    const request = mockPublishIssue();
+    const result = await tools.publishIssue({ finding_id: pid(7) });
+    expect(post).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledOnce();
+    expect(result.external_url).toBe("https://github.com/o/r/issues/12");
+    expect(result.hint).toContain("public GitHub issue");
+  });
+
+  it("publish_issue reuses the draft the finding already has", async () => {
+    mockClient("post", () => {
+      throw new HttpStatusError(409, "already exists", "http://x");
+    });
+    mockPublishIssue();
+    const result = await tools.publishIssue({ finding_id: pid(7) });
+    expect(result.external_url).toBe("https://github.com/o/r/issues/12");
+  });
+
+  it("publish_issue 409 gets the publish hint", async () => {
+    mockClient("post", () => draft);
+    mockClient("request", () => {
+      throw new HttpStatusError(409, "The report is already published to GitHub", "http://x");
+    });
+    const result = await tools.publishIssue({ finding_id: pid(7) });
     expect(result.status).toBe(409);
     expect(result.hint).toBe(tools.PUBLISH_ADVISORY_409_HINT);
   });
