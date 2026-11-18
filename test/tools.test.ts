@@ -230,6 +230,16 @@ it("update_execution_visibility validates and patches", async () => {
   expect(request).toHaveBeenCalled();
 });
 
+it("update_execution_visibility takes CONTRIBUTORS, which jobs do not", async () => {
+  const request = mockClient("request", () => new Response(null));
+  expect(await tools.updateExecutionVisibility({ execution_id: pid(7), visibility: "contributors" })).toEqual({
+    execution_id: pid(7),
+    visibility: "CONTRIBUTORS",
+  });
+  expect(request).toHaveBeenCalledWith("PATCH", `/executions/${pid(7)}`, { json: { visibility: "CONTRIBUTORS" } });
+  expect(tools.VISIBILITIES).not.toContain("CONTRIBUTORS");
+});
+
 describe("delete_execution / delete_executions / delete_job", () => {
   it("delete_execution soft-fails while RUNNING", async () => {
     mockClient("get", () => ({ status: "RUNNING" }));

@@ -222,7 +222,11 @@ Returns the same shape as run_playbook; analyze with get_execution_output and li
 
   tool(
     "update_execution_visibility",
-    `Change an execution/report's visibility (PUBLIC, PRIVATE or UNLISTED).
+    `Change an execution/report's visibility (PUBLIC, PRIVATE, UNLISTED or CONTRIBUTORS).
+
+CONTRIBUTORS shows it only to the owner and to the GitHub contributors of its repository, who
+open it by link while logged in with GitHub. It needs a public repository: the API answers 422
+for a private one or an execution without a repository.
 
 Only when the user asked.`,
     { execution_id: publicId(), visibility: z.string() },

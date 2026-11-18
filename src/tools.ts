@@ -40,6 +40,8 @@ export const DOC_PAGES: Record<string, string> = {
 export const REPORT_STATUSES = ["PASS", "FAIL"];
 export const JOB_TYPES = ["RUN", "SCAN", "MONITOR", "GITHUB", "LOCAL"];
 export const VISIBILITIES = ["PUBLIC", "PRIVATE", "UNLISTED"];
+// Only an execution can be shared with its repository's GitHub contributors.
+export const EXECUTION_VISIBILITIES = [...VISIBILITIES, "CONTRIBUTORS"];
 export const FINDING_STATUSES = ["OPEN", "INVESTIGATING", "TP", "FIXED", "FP", "ACCEPTED"];
 export const EXPLOITABILITY_VALUES = ["UNKNOWN", "EXPLOITABLE", "NOT_EXPLOITABLE", "INCONCLUSIVE"];
 export const ADVISORY_SEVERITIES = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
@@ -550,7 +552,7 @@ export const stopExecution = safe(async ({ execution_id: id }: { execution_id: s
 export const updateExecutionVisibility = safe(
   async ({ execution_id: id, visibility }: { execution_id: string; visibility: string }): Promise<Dict> => {
     visibility = visibility.toUpperCase();
-    if (!VISIBILITIES.includes(visibility)) return oneOf("visibility", VISIBILITIES);
+    if (!EXECUTION_VISIBILITIES.includes(visibility)) return oneOf("visibility", EXECUTION_VISIBILITIES);
     // API returns 200 with an empty body.
     await client.request("PATCH", `/executions/${id}`, { json: { visibility } });
     return { execution_id: id, visibility };
@@ -1448,7 +1450,7 @@ export const getAdvisoryStatus = safe(async ({ advisory_id: id }: { advisory_id:
 export const updateAdvisoryVisibility = safe(
   async ({ advisory_id: id, visibility }: { advisory_id: string; visibility: string }): Promise<Dict> => {
     visibility = visibility.toUpperCase();
-    if (!VISIBILITIES.includes(visibility)) return oneOf("visibility", VISIBILITIES);
+    if (!EXECUTION_VISIBILITIES.includes(visibility)) return oneOf("visibility", EXECUTION_VISIBILITIES);
     // API returns 200 with an empty body.
     await client.request("PATCH", `/external_issues/${id}`, { json: { visibility } });
     return { id, visibility };
