@@ -811,10 +811,10 @@ active organization, you are switched back to your own account.`,
 
   tool(
     "add_organization_member",
-    `Add a user by email (they must have logged in to Satori before). role: ${tools.ROLES.join(", ")} (default MEMBER).
+    `Add a user by email or by GitHub username, exactly one of the two (they must have logged in to Satori before). role: ${tools.ROLES.join(", ")} (default MEMBER).
 
 Only when the user asked. OWNER or ADMIN only; only an OWNER can add an OWNER.`,
-    { organization_id: int(), email: z.string(), role: z.string().optional() },
+    { organization_id: int(), email: z.string().optional(), github: z.string().optional(), role: z.string().optional() },
     (args) => tools.addOrganizationMember(args),
   );
 

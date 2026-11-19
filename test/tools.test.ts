@@ -1533,7 +1533,17 @@ describe("organizations", () => {
       email: "b@c.d",
       role: "ADMIN",
     });
-    expect(posts).toEqual([["/organizations/7/members", { email: "b@c.d", role: "MEMBER" }]]);
+    await tools.addOrganizationMember({ organization_id: 7, github: "bo", role: "admin" });
+    expect(posts).toEqual([
+      ["/organizations/7/members", { email: "b@c.d", role: "MEMBER" }],
+      ["/organizations/7/members", { github: "bo", role: "ADMIN" }],
+    ]);
+    for (const who of [{}, { email: "b@c.d", github: "bo" }]) {
+      expect((await tools.addOrganizationMember({ organization_id: 7, ...who })).error).toBe(
+        "Pass either email or github",
+      );
+    }
+    expect(posts).toHaveLength(2);
 
     mockClient("patch", (url, body) => {
       expect([url, body]).toEqual(["/organizations/7/members/2", { role: "OWNER" }]);

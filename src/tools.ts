@@ -1594,10 +1594,22 @@ function parseRole(role: string): string | { error: string } {
 }
 
 export const addOrganizationMember = safe(
-  async ({ organization_id: id, email, role = "MEMBER" }: { organization_id: number; email: string; role?: string }) => {
+  async ({
+    organization_id: id,
+    email,
+    github,
+    role = "MEMBER",
+  }: {
+    organization_id: number;
+    email?: string;
+    github?: string;
+    role?: string;
+  }) => {
     const parsed = parseRole(role);
     if (typeof parsed !== "string") return parsed;
-    return shapeMember(await client.post(`/organizations/${id}/members`, { email, role: parsed }));
+    if (!email === !github) return { error: "Pass either email or github" };
+    const who = email ? { email } : { github };
+    return shapeMember(await client.post(`/organizations/${id}/members`, { ...who, role: parsed }));
   },
 );
 
