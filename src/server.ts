@@ -639,8 +639,9 @@ prior create_security_advisory draft. Returns external_url on success.`,
 
 Only when the user asked to publish it as an issue. For repositories without private
 vulnerability reporting: the issue only says there is a security problem and links to the
-report on Satori, which becomes UNLISTED if it was PRIVATE. Uses finding_id; creates the
-draft when the finding has none. A finding is published once, as an advisory or as an issue.
+report on Satori, which becomes UNLISTED if it was PRIVATE. The report's execution becomes
+CONTRIBUTORS (the repository's GitHub contributors) unless it is PUBLIC or the repository is
+private. Uses finding_id; creates the draft when the finding has none. A finding is published once, as an advisory or as an issue.
 Returns external_url on success.`,
     { finding_id: publicId() },
     (args) => tools.publishIssue(args),
