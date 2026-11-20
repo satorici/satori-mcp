@@ -615,7 +615,8 @@ capped at ${MAX_ADVISORY_DESCRIPTION_CHARS} chars unless full_description=true (
     `Create a local GitHub security-advisory draft from a finding (PRO/ENTERPRISE).
 
 Only when the user asked. Derives title/description from the finding (and completed AI
-analysis if any). Optional visibility (PUBLIC, PRIVATE, UNLISTED; default UNLISTED).
+analysis if any). Optional visibility (PUBLIC, PRIVATE, UNLISTED or CONTRIBUTORS; default
+UNLISTED; CONTRIBUTORS as in update_advisory_visibility).
 Does not contact GitHub — call publish_security_advisory when asked to publish.
 Creating a draft can promote a PRIVATE execution to UNLISTED. If one already exists
 for the finding, returns the existing row.`,
@@ -628,7 +629,9 @@ for the finding, returns the existing row.`,
     `Submit an existing security-advisory draft to GitHub (PRO/ENTERPRISE; needs GitHub PAT in Settings).
 
 Only when the user asked to publish. Uses finding_id (not advisory_id). Requires a
-prior create_security_advisory draft. Returns external_url on success.`,
+prior create_security_advisory draft. On Satori a PRIVATE or UNLISTED advisory becomes
+CONTRIBUTORS (the owner plus the repository's GitHub contributors) when GitHub lists them.
+Returns external_url on success.`,
     { finding_id: publicId() },
     (args) => tools.publishSecurityAdvisory(args),
   );
@@ -639,9 +642,10 @@ prior create_security_advisory draft. Returns external_url on success.`,
 
 Only when the user asked to publish it as an issue. For repositories without private
 vulnerability reporting: the issue only says there is a security problem and links to the
-report on Satori, which becomes UNLISTED if it was PRIVATE. The report's execution becomes
-CONTRIBUTORS (the repository's GitHub contributors) unless it is PUBLIC or the repository is
-private. Uses finding_id; creates the draft when the finding has none. A finding is published once, as an advisory or as an issue.
+report on Satori. The report and its execution become CONTRIBUTORS (the owner plus the
+repository's GitHub contributors, logged in to Satori) unless they are PUBLIC. When GitHub does
+not list the contributors (a private repository) they keep their visibility, except a PRIVATE
+report, which becomes UNLISTED so the link opens. Uses finding_id; creates the draft when the finding has none. A finding is published once, as an advisory or as an issue.
 Returns external_url on success.`,
     { finding_id: publicId() },
     (args) => tools.publishIssue(args),
@@ -683,9 +687,12 @@ Also stores the state and the last comment, so list_advisories and get_advisory 
 
   tool(
     "update_advisory_visibility",
-    `Change an advisory's visibility (PUBLIC, PRIVATE or UNLISTED).
+    `Change an advisory's visibility (PUBLIC, PRIVATE, UNLISTED or CONTRIBUTORS).
 
-Only when the user asked. Does not change the GitHub remote advisory.`,
+Only when the user asked. Does not change the GitHub remote advisory.
+CONTRIBUTORS shows it only to the owner and to the GitHub contributors of its repository, who
+open it by link while logged in with GitHub. It needs a public repository: the API answers 422
+for a private one or an advisory without a repository.`,
     { advisory_id: publicId(), visibility: z.string() },
     (args) => tools.updateAdvisoryVisibility(args),
   );

@@ -1217,6 +1217,24 @@ describe("security advisories", () => {
     expect(result.hint).toContain("publish_security_advisory");
   });
 
+  it("an advisory takes CONTRIBUTORS on create and on update", async () => {
+    const post = mockClient("post", () => draft);
+    await tools.createSecurityAdvisory({ finding_id: pid(7), visibility: "contributors" });
+    expect(post).toHaveBeenCalledWith("/external_issues/security_advisory", {
+      finding_id: pid(7),
+      visibility: "CONTRIBUTORS",
+    });
+
+    const request = mockClient("request", () => ({ ok: true }));
+    expect(await tools.updateAdvisoryVisibility({ advisory_id: pid(42), visibility: "contributors" })).toEqual({
+      id: pid(42),
+      visibility: "CONTRIBUTORS",
+    });
+    expect(request).toHaveBeenCalledWith("PATCH", `/external_issues/${pid(42)}`, {
+      json: { visibility: "CONTRIBUTORS" },
+    });
+  });
+
   it("create_security_advisory returns existing on 409", async () => {
     mockClient("post", () => {
       throw new HttpStatusError(409, "already exists", "http://x");
