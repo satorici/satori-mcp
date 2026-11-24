@@ -556,6 +556,80 @@ describe("AI analysis", () => {
     expect(result.hint).toContain("Still PENDING");
   });
 
+  const fixPath = `/findings/${pid(3)}/fix`;
+  const pendingFix = { id: 4, finding_id: pid(3), status: "PENDING", source: "AI", diff: null };
+  const completedFix = { ...pendingFix, status: "COMPLETED", diff: "-a\n+b", path: "src/app.js" };
+
+  it("get_finding_fix shapes the latest fix and hints generate_finding_fix on 404", async () => {
+    mockClient("get", (url) => {
+      expect(url).toBe(fixPath);
+      return completedFix;
+    });
+    expect(await tools.getFindingFix({ finding_id: pid(3) })).toMatchObject({
+      status: "COMPLETED",
+      diff: "-a\n+b",
+      path: "src/app.js",
+    });
+
+    mockClient("get", () => {
+      throw new HttpStatusError(404, "no fix", "http://x");
+    });
+    expect(await tools.getFindingFix({ finding_id: pid(3) })).toMatchObject({
+      status: 404,
+      hint: expect.stringContaining("generate_finding_fix"),
+    });
+  });
+
+  it("generate_finding_fix posts with force and polls the fix until it is written", async () => {
+    mockClient("request", (method, path, options) => {
+      expect([method, path]).toEqual(["POST", fixPath]);
+      expect(options?.params).toEqual({ force: true });
+      return { json: async () => pendingFix };
+    });
+    const get = mockClient("get", (url) => {
+      expect(url).toBe(fixPath);
+      return completedFix;
+    });
+    vi.spyOn(tools.deps, "now").mockReturnValue(0);
+
+    const result = await tools.generateFindingFix({ finding_id: pid(3), force: true });
+    expect(result).toMatchObject({ status: "COMPLETED", diff: "-a\n+b" });
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it("generate_finding_fix returns a tool's fix at once and the API's refusal as an error", async () => {
+    mockClient("request", (_method, _path, options) => {
+      expect(options?.params).toBeUndefined();
+      return { json: async () => ({ ...completedFix, source: "TOOL" }) };
+    });
+    expect(await tools.generateFindingFix({ finding_id: pid(3) })).toMatchObject({ source: "TOOL", status: "COMPLETED" });
+
+    mockClient("request", () => {
+      throw new HttpStatusError(409, "Confirm the finding as a true positive first", "http://x");
+    });
+    expect(await tools.generateFindingFix({ finding_id: pid(3) })).toMatchObject({
+      status: 409,
+      error: expect.stringContaining("Confirm the finding"),
+    });
+  });
+
+  it("generate_finding_fix leaves a PENDING fix to get_finding_fix when it does not wait", async () => {
+    mockClient("request", () => ({ json: async () => pendingFix }));
+    const result = await tools.generateFindingFix({ finding_id: pid(3), wait: false });
+    expect(result).toMatchObject({ status: "PENDING", hint: expect.stringContaining("get_finding_fix") });
+  });
+
+  it("open_finding_fix_pull_request posts and returns the pull request", async () => {
+    mockClient("post", (url) => {
+      expect(url).toBe(`${fixPath}/pull-request`);
+      return { ...completedFix, pr_url: "https://github.com/acme/api/pull/9", pr_number: 9 };
+    });
+    expect(await tools.openFindingFixPullRequest({ finding_id: pid(3) })).toMatchObject({
+      pr_url: "https://github.com/acme/api/pull/9",
+      pr_number: 9,
+    });
+  });
+
   it("analyze_execution posts body, validates finding_ids, returns skipped/omitted", async () => {
     expect((await tools.analyzeExecution({ execution_id: pid(1), finding_ids: [] })).error).toContain("non-empty");
     expect(

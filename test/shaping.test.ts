@@ -36,10 +36,19 @@ it("summarizeExecution caps tests and drops logs", () => {
   }));
   detail[0].asserts = [{ msg: "y".repeat(5000) }];
   const summary = shaping.summarizeExecution(
-    { id: pid(1), status: "FINISHED", visibility: "UNLISTED", report: { total_fails: 2, detail } },
+    {
+      id: pid(1),
+      status: "FINISHED",
+      visibility: "UNLISTED",
+      repository: "acme/api",
+      organization: { id: 7, name: "Acme" },
+      report: { total_fails: 2, detail },
+    },
     "http://r/1",
   );
   expect(summary.visibility).toBe("UNLISTED");
+  expect(summary.repository).toBe("acme/api");
+  expect(summary.organization).toEqual({ id: 7, name: "Acme" });
   expect(summary.tests).toHaveLength(shaping.MAX_TESTS);
   expect(summary.truncated).toBe(true);
   expect(summary.tests_total).toBe(80);
@@ -76,6 +85,25 @@ it("summarizeFindingEvent clips payload and keeps display_name", () => {
   });
   expect(event.display_name).toBe("Ada");
   expect(event.payload.note.length).toBeLessThan(600);
+});
+
+it("summarizeFix caps the diff and says what to do in each state", () => {
+  const fix = { id: 4, finding_id: pid(3), status: "COMPLETED", source: "TOOL", diff: "+".repeat(30_000) };
+  const completed = shaping.summarizeFix(fix);
+  expect(completed.diff.length).toBeLessThan(30_000);
+  expect(completed.diff_truncated).toBe(true);
+  expect(completed.hint).toContain("open_finding_fix_pull_request");
+
+  expect(shaping.summarizeFix({ ...fix, diff: "+a", pr_url: "https://github.com/acme/api/pull/9" })).toMatchObject({
+    diff: "+a",
+    pr_url: "https://github.com/acme/api/pull/9",
+    hint: expect.stringContaining("final"),
+  });
+  expect(shaping.summarizeFix({ status: "PENDING" }).hint).toContain("get_finding_fix");
+  expect(shaping.summarizeFix({ status: "FAILED", error: "no match" })).toMatchObject({
+    error: "no match",
+    hint: expect.stringContaining("force=true"),
+  });
 });
 
 it("summarizeExecutionRow works without a report", () => {

@@ -841,20 +841,20 @@ function shapeAiAnalysis(analysis: Dict): Dict {
   return shaping.summarizeAiAnalysis(analysis);
 }
 
-async function postFindingAiAnalysis(findingId: string, force: boolean): Promise<Dict> {
-  const response = await client.request("POST", `/findings/${findingId}/ai-analysis`, {
+/** POST a finding's AI job (`ai-analysis` or `fix`): the row it returns is PENDING until Satori completes it. */
+async function queueFindingAiJob(path: string, force: boolean): Promise<Dict> {
+  const response = await client.request("POST", path, {
     params: force ? { force: true } : undefined,
   });
   return response.json() as Promise<Dict>;
 }
 
-async function waitForFindingAiAnalysis(findingId: string, deadlineMs: number, initial?: Dict): Promise<Dict> {
-  let analysis: Dict = initial ?? (await client.get(`/findings/${findingId}/ai-analysis`));
-  while (analysis.status === "PENDING" && deps.now() < deadlineMs) {
+async function pollWhilePending(path: string, deadlineMs: number, row: Dict): Promise<Dict> {
+  while (row.status === "PENDING" && deps.now() < deadlineMs) {
     await deps.sleep(AI_ANALYSIS_POLL_MS);
-    analysis = await client.get(`/findings/${findingId}/ai-analysis`);
+    row = await client.get(path);
   }
-  return analysis;
+  return row;
 }
 
 /** Collect analysis rows for the given ids from the execution-scoped list (paginated). */
@@ -918,10 +918,11 @@ export interface AnalyzeFindingArgs {
 
 const _analyzeFinding = safe(async (args: AnalyzeFindingArgs): Promise<Dict> => {
   const { finding_id: id, force = false, wait = true, wait_seconds: waitSeconds = AI_ANALYSIS_DEFAULT_WAIT } = args;
-  let analysis = await postFindingAiAnalysis(id, force);
+  const path = `/findings/${id}/ai-analysis`;
+  let analysis = await queueFindingAiJob(path, force);
   if (wait && analysis.status === "PENDING") {
     const deadline = deps.now() + clamp(waitSeconds, 0, AI_ANALYSIS_MAX_WAIT) * 1000;
-    analysis = await waitForFindingAiAnalysis(id, deadline, analysis);
+    analysis = await pollWhilePending(path, deadline, analysis);
   }
   const result = shapeAiAnalysis(analysis);
   if (wait && analysis.status === "PENDING") {
@@ -932,6 +933,36 @@ const _analyzeFinding = safe(async (args: AnalyzeFindingArgs): Promise<Dict> => 
 
 export const analyzeFinding = async (args: AnalyzeFindingArgs): Promise<Dict> =>
   withAi409Hint(await _analyzeFinding(args));
+
+export const getFindingFix = safe(async ({ finding_id: id }: { finding_id: string }): Promise<Dict> => {
+  try {
+    return shaping.summarizeFix(await client.get(`/findings/${id}/fix`));
+  } catch (e) {
+    if (e instanceof HttpStatusError && e.status === 404) {
+      return {
+        error: shaping.clip(e.text, 2000),
+        status: 404,
+        hint: "No fix yet. Call generate_finding_fix(finding_id) when the user asks for one.",
+      };
+    }
+    throw e;
+  }
+});
+
+export const generateFindingFix = safe(async (args: AnalyzeFindingArgs): Promise<Dict> => {
+  const { finding_id: id, force = false, wait = true, wait_seconds: waitSeconds = AI_ANALYSIS_DEFAULT_WAIT } = args;
+  const path = `/findings/${id}/fix`;
+  let fix = await queueFindingAiJob(path, force);
+  if (wait) {
+    const deadline = deps.now() + clamp(waitSeconds, 0, AI_ANALYSIS_MAX_WAIT) * 1000;
+    fix = await pollWhilePending(path, deadline, fix);
+  }
+  return shaping.summarizeFix(fix);
+});
+
+export const openFindingFixPullRequest = safe(async ({ finding_id: id }: { finding_id: string }): Promise<Dict> =>
+  shaping.summarizeFix(await client.post(`/findings/${id}/fix/pull-request`, undefined)),
+);
 
 export interface AnalyzeExecutionArgs {
   execution_id: string;
@@ -1168,7 +1199,7 @@ export const stopScan = safe(async ({ scan_id: id }: { scan_id: string }): Promi
   return {
     scan_id: id,
     stopped: true,
-    hint: "Stop cancels the scan job (no new executions). In-flight RUNNING ones keep going — use stop_execution per id for a hard stop. Call get_job to confirm.",
+    hint: "Stop cancels the scan job and its RUNNING executions. Call get_job to confirm.",
   };
 });
 

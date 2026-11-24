@@ -20,6 +20,8 @@ export const INSTRUCTIONS =
   "analyze_finding / analyze_execution queue server-side AI analysis with the account's AI key " +
   "(only when asked); get_finding_ai_analysis reads the latest. suggested_status is advisory — " +
   "do not call update_finding_status unless the user asked to triage. " +
+  "generate_finding_fix writes a fix for a confirmed finding and open_finding_fix_pull_request opens its " +
+  "pull request on GitHub (each only when asked); get_finding_fix reads the latest fix and its diff. " +
   "create_security_advisory / publish_security_advisory / publish_issue / publish_report / update_advisory / " +
   "update_advisory_visibility / delete_security_advisory only when asked; get_advisory, get_advisory_status " +
   "and get_report_channel are read-only. publish_report picks advisory or issue for the repository. " +
@@ -435,6 +437,47 @@ Returns items, skipped and omitted. suggested_status is advisory only.`,
   );
 
   tool(
+    "get_finding_fix",
+    `Latest fix written for a finding (PENDING, COMPLETED or FAILED), with its diff.
+
+The diff is what the pull request would change in one file of the repository's default
+branch. source is TOOL (the finding's tool proved it) or AI. pr_url is set once the pull
+request is open. 404 if none exists yet.`,
+    { finding_id: publicId() },
+    (args) => tools.getFindingFix(args),
+  );
+
+  tool(
+    "generate_finding_fix",
+    `Write a fix for the file a confirmed (TP) finding points at.
+
+Only when the user asked for a fix. Uses the fix the finding's tool proved when it still
+applies; otherwise the account's AI provider writes it (costs apply). Needs the Satori
+GitHub App on the repository. Returns the existing fix unless force=true; a fix with a
+pull request is final. With wait (default true), polls until COMPLETED/FAILED or
+wait_seconds (max 600). Show the diff to the user; it does not open a pull request.`,
+    {
+      finding_id: publicId(),
+      force: z.boolean().default(false),
+      wait: z.boolean().default(true),
+      wait_seconds: int().default(tools.AI_ANALYSIS_DEFAULT_WAIT),
+    },
+    (args) => tools.generateFindingFix(args),
+  );
+
+  tool(
+    "open_finding_fix_pull_request",
+    `Open a pull request on GitHub with the latest COMPLETED fix of a finding.
+
+Only when the user asked for the pull request, after they saw the diff. The Satori GitHub
+App commits it on a satori/fix-... branch (needs Contents and Pull requests write);
+Satori never merges it. Returns the same pull request when it is already open. Fails
+when the file changed since the fix was written: generate the fix again with force=true.`,
+    { finding_id: publicId() },
+    (args) => tools.openFindingFixPullRequest(args),
+  );
+
+  tool(
     "list_jobs",
     `List jobs, newest first (a job is the parent of executions; use it to recover a job_id).
 
@@ -497,8 +540,8 @@ added automatically.`,
     "stop_scan",
     `Cancel a scan job so it stops launching new executions.
 
-Only when the user asked. Does not cancel in-flight RUNNING executions — use
-stop_execution per id for that. Soft-fails if the scan is already CANCELED or FINISHED.`,
+Only when the user asked. Also cancels the scan's RUNNING executions; finished reports
+are kept. Soft-fails if the scan is already CANCELED or FINISHED.`,
     { scan_id: publicId() },
     (args) => tools.stopScan(args),
   );

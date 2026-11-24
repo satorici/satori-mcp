@@ -17,6 +17,7 @@ export const MAX_PLAYBOOK_CHARS = 20_000;
 export const MAX_TIMELINE_ITEMS = 20;
 export const MAX_COMMENT_CHARS = 2_000;
 export const MAX_AI_FIX_STEPS = 10;
+export const MAX_FIX_DIFF_CHARS = 20_000;
 export const MAX_ADVISORY_DESCRIPTION_CHARS = 4_000;
 export const OUTPUT_STREAMS = ["stdout", "stderr", "os_error"] as const;
 
@@ -60,6 +61,8 @@ export function summarizeExecution(execution: Dict, reportUrl: string | null = n
     status: execution.status ?? null,
     created_at: execution.created_at ?? null,
     job_id: execution.job_id ?? null,
+    repository: execution.repository ?? null,
+    organization: execution.organization ?? null,
     visibility: execution.visibility ?? null,
     total_fails: report.total_fails ?? null,
     severities: report.severities ?? null,
@@ -88,6 +91,7 @@ export function summarizeExecutionRow(execution: Dict, reportUrl: string | null 
     created_at: execution.created_at ?? null,
     job_id: execution.job_id ?? null,
     job_type: job.type ?? null,
+    repository: execution.repository ?? null,
     total_fails: report.total_fails ?? null,
     report_url: reportUrl,
   };
@@ -220,6 +224,45 @@ export function summarizeAiAnalysis(analysis: Dict): Dict {
   } else if (analysis.status === "PENDING") {
     result.hint = "Still pending. Call get_finding_ai_analysis(finding_id) later.";
   }
+  return result;
+}
+
+function fixHint(fix: Dict): string {
+  if (fix.pr_url) return "The pull request is open; this fix is final.";
+  switch (fix.status) {
+    case "PENDING":
+      return "Still being written. Call get_finding_fix(finding_id) later.";
+    case "FAILED":
+      return "The fix failed. Call generate_finding_fix with force=true to write another, only when the user asks.";
+    case "COMPLETED":
+      return "Show the diff to the user. Call open_finding_fix_pull_request only when they ask for the pull request.";
+    default:
+      return "";
+  }
+}
+
+/** Fix row: the diff the pull request would apply, capped, and what to do next. */
+export function summarizeFix(fix: Dict): Dict {
+  const diff = typeof fix.diff === "string" ? fix.diff : null;
+  const result: Dict = {
+    id: fix.id ?? null,
+    finding_id: fix.finding_id ?? null,
+    status: fix.status ?? null,
+    source: fix.source ?? null,
+    model: fix.model ?? null,
+    repository: fix.repository ?? null,
+    path: fix.path ?? null,
+    base_branch: fix.base_branch ?? null,
+    title: clip(fix.title ?? null),
+    description: clip(fix.description ?? null, 2000),
+    diff: clip(diff, MAX_FIX_DIFF_CHARS),
+    pr_url: fix.pr_url ?? null,
+    pr_number: fix.pr_number ?? null,
+    error: clip(fix.error ?? null),
+  };
+  if (diff !== null && diff.length > MAX_FIX_DIFF_CHARS) result.diff_truncated = true;
+  const hint = fixHint(fix);
+  if (hint) result.hint = hint;
   return result;
 }
 
