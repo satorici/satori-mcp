@@ -106,6 +106,26 @@ it("turns HTTP errors into error objects", async () => {
   expect(result.hint).toContain("PRO");
 });
 
+it("says to log in again when the API no longer takes the token", async () => {
+  mockClient("get", () => {
+    throw new HttpStatusError(401, '{"detail":"Unauthorized"}', "http://x");
+  });
+  const result = await tools.getExecution({ execution_id: pid(1) });
+  expect(result.status).toBe(401);
+  expect(result.hint).toContain("npx -y github:satorici/satori-mcp login");
+});
+
+it.each(["Tokens can't be used here, log in instead", "The token lacks the jobs:write scope"])(
+  "points to the dashboard when the token is refused: %s",
+  async (detail) => {
+    mockClient("get", () => {
+      throw new HttpStatusError(403, JSON.stringify({ detail }), "http://x");
+    });
+    const result = await tools.getExecution({ execution_id: pid(1) });
+    expect(result.hint).toBe(tools.TOKEN_403_HINT);
+  },
+);
+
 it("hints AI Settings when AI analysis returns 409", async () => {
   mockClient("request", () => {
     throw new HttpStatusError(409, "No provider selected", "http://x");

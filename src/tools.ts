@@ -87,11 +87,19 @@ export const AI_ANALYSIS_409_HINT =
 export const PUBLISH_ADVISORY_409_HINT =
   "Conflict: advisory may already be published, or no GitHub PAT is configured in Settings.";
 
+export const TOKEN_401_HINT = `The token is invalid, expired or revoked. Run: ${LOGIN_COMMAND} (or set SATORI_TOKEN)`;
+
+export const TOKEN_403_HINT =
+  `The token is not allowed to do this. Saved parameters, secrets and organizations are changed in the dashboard. For a missing scope, run: ${LOGIN_COMMAND}`;
+
 export function errorResult(e: unknown): Dict | null {
   if (e instanceof AuthError) return { error: `Not logged in. Run: ${LOGIN_COMMAND} (or set SATORI_TOKEN)` };
   if (e instanceof HttpStatusError) {
     const result: Dict = { error: shaping.clip(e.text, 2000), status: e.status };
-    if (e.status === 403) result.hint = "This action needs a PRO or ENTERPRISE plan.";
+    if (e.status === 401) result.hint = TOKEN_401_HINT;
+    if (e.status === 403) {
+      result.hint = /\btokens?\b/i.test(e.text) ? TOKEN_403_HINT : "This action needs a PRO or ENTERPRISE plan.";
+    }
     return result;
   }
   if (e instanceof ApiTimeoutError) return { error: "Request to the Satori API timed out." };

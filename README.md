@@ -11,12 +11,18 @@ Run it straight from GitHub (npm clones the repo and builds it through the `prep
 npx -y github:satorici/satori-mcp
 ```
 
-Save your API token once (hidden prompt, or piped on stdin); the token is checked against the
-API and stored in `~/.satori_credentials.yml`:
+Log in once. `login` opens the dashboard, where you approve a new API token for this computer.
+The dashboard posts the token to a listener on `127.0.0.1`, and `login` checks it against the
+API and stores it in `~/.satori_credentials.yml`:
 
 ```sh
 npx -y github:satorici/satori-mcp login
 ```
+
+The token is named `MCP (<hostname>)`, and logging in again replaces it. It has the scopes the
+tools call. It cannot change saved parameters, secrets or organizations, which take the
+dashboard. On a machine without a browser, create a token in the dashboard's API tokens page
+and run `login --paste` (hidden prompt), or pipe the token on stdin.
 
 MCP client config:
 
@@ -55,7 +61,7 @@ Requests act on the profile's `organization` (`satori-v2 organization ID use`) o
 | `src/shaping.ts` | Caps and summaries applied to every response |
 | `src/recommend.ts` + `data/recommendations.yaml` | `recommend_playbook` stack detection and rules |
 | `src/local/` | `run_local` engine: recipe runner, result substitution, upload |
-| `src/login.ts` | The `login` command: check a token and save it |
+| `src/login.ts` | The `login` command: get a token from the dashboard (or a pasted one), check it and save it |
 | `src/api.ts`, `src/config.ts`, `src/bundle.ts`, `src/git.ts` | API client, CLI-compatible config, playbook bundles, shallow clones |
 
 stdout is the protocol channel: nothing may print to it.

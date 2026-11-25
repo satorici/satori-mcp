@@ -8,7 +8,7 @@ import { ApiClient, buildQuery } from "../src/api.js";
 import { dumpFileUris, makeBundle } from "../src/bundle.js";
 import { Config, config } from "../src/config.js";
 import { SatoriError } from "../src/errors.js";
-import { login } from "../src/login.js";
+import { login, TOKEN_SCOPES } from "../src/login.js";
 import { CLONE_ATTEMPTS, cloneRepo, gitDeps, originRepository } from "../src/git.js";
 import { runTestFilter } from "../src/outputs.js";
 import { pyRepr, pyTuple, splitLines } from "../src/pyrepr.js";
@@ -306,5 +306,87 @@ describe("login", () => {
     const { deps, text } = setup({ env: { SATORI_TOKEN: "other" } });
     expect(await login(deps)).toBe(0);
     expect(text()).toContain("SATORI_TOKEN is set and overrides the saved token");
+  });
+
+  describe("in the browser", () => {
+    const SAT_TOKEN = `sat_${"a".repeat(49)}`;
+
+    /** Starts the login and resolves with what the dashboard would be opened with. */
+    async function start(options: Parameters<typeof setup>[0] & { approvalTimeoutMs?: number } = {}) {
+      const context = setup(options);
+      let opened!: (url: URL) => void;
+      const url = new Promise<URL>((resolve) => (opened = resolve));
+      const exit = login({
+        ...context.deps,
+        browser: true,
+        openBrowser: (target) => opened(new URL(target)),
+        approvalTimeoutMs: options.approvalTimeoutMs ?? 5000,
+      });
+      const authorize = await url;
+      const callback = `http://127.0.0.1:${authorize.searchParams.get("port")}/callback`;
+      const post = (fields: Record<string, string>, target = callback) =>
+        fetch(target, { method: "POST", body: new URLSearchParams(fields) });
+      return { ...context, exit, authorize, callback, post, state: authorize.searchParams.get("state")! };
+    }
+
+    it("asks the dashboard for a token and saves the one posted back", async () => {
+      const { file, exit, authorize, post, state, requests, text } = await start();
+      expect(authorize.pathname).toBe("/cli/authorize");
+      expect(authorize.searchParams.get("name")).toMatch(/^MCP \(.+\)$/);
+      expect(authorize.searchParams.get("scopes")!.split(",")).toEqual(TOKEN_SCOPES);
+      expect(state.length).toBeGreaterThanOrEqual(43);
+      expect(text()).toContain(authorize.href);
+
+      const response = await post({ token: SAT_TOKEN, state });
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("Logged in");
+      expect(await exit).toBe(0);
+      expect(requests).toEqual([{ url: expect.stringMatching(/\/settings$/), authorization: `Bearer ${SAT_TOKEN}` }]);
+      expect(parse(readFileSync(file, "utf-8"))).toEqual({ default: { token: SAT_TOKEN } });
+      expect(text()).not.toContain(SAT_TOKEN);
+    });
+
+    it("refuses a token posted without its state and keeps waiting", async () => {
+      const { file, exit, post, state, requests } = await start();
+      expect((await post({ token: SAT_TOKEN, state: "guess" })).status).toBe(400);
+      expect((await post({ token: SAT_TOKEN })).status).toBe(400);
+      expect((await post({ token: "not-a-token", state })).status).toBe(400);
+      expect(requests).toEqual([]);
+      expect(existsSync(file)).toBe(false);
+
+      expect((await post({ token: SAT_TOKEN, state })).status).toBe(200);
+      expect(await exit).toBe(0);
+    });
+
+    it("only answers POST /callback", async () => {
+      const { file, exit, callback, post, state } = await start({ approvalTimeoutMs: 300 });
+      expect((await fetch(`${callback}?token=${SAT_TOKEN}&state=${state}`)).status).toBe(404);
+      expect((await post({ token: SAT_TOKEN, state }, callback.replace("/callback", "/"))).status).toBe(404);
+      expect(await exit).toBe(1);
+      expect(existsSync(file)).toBe(false);
+    });
+
+    it("refuses a body that is too large", async () => {
+      const { exit, post, state } = await start({ approvalTimeoutMs: 300 });
+      expect((await post({ token: SAT_TOKEN, state, padding: "x".repeat(5000) })).status).toBe(400);
+      expect(await exit).toBe(1);
+    });
+
+    it("gives up when nobody approves", async () => {
+      const { file, exit, callback, text } = await start({ approvalTimeoutMs: 50 });
+      expect(await exit).toBe(1);
+      expect(text()).toContain("Timed out waiting for the approval");
+      expect(existsSync(file)).toBe(false);
+      await expect(fetch(callback, { method: "POST" })).rejects.toThrow();
+    });
+
+    it("saves nothing when the API rejects the posted token", async () => {
+      const { file, exit, post, state, text } = await start({ status: 401 });
+      const response = await post({ token: SAT_TOKEN, state });
+      expect(await response.text()).toContain("Login failed");
+      expect(await exit).toBe(1);
+      expect(text()).toContain("Token rejected. Nothing was saved.");
+      expect(existsSync(file)).toBe(false);
+    });
   });
 });
