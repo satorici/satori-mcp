@@ -218,7 +218,7 @@ it("says to log in again when the API no longer takes the token", async () => {
 });
 
 it.each(["Tokens can't be used here, log in instead", "The token lacks the jobs:write scope"])(
-  "points to the dashboard when the token is refused: %s",
+  "points to login when the token is refused: %s",
   async (detail) => {
     mockClient("get", () => {
       throw new HttpStatusError(403, JSON.stringify({ detail }), "http://x");

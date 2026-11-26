@@ -21,7 +21,7 @@ const MAX_CALLBACK_BYTES = 4096;
 const TOKEN_REGEX = /^sat_[0-9A-Za-z]{49}$/;
 const MAX_TOKEN_NAME = 100;
 
-/** What the tools call. Settings and organizations have no write scope: those stay in the dashboard. */
+/** What the tools call. No scope manages tokens: that stays in the dashboard. */
 export const TOKEN_SCOPES = [
   "jobs:read",
   "jobs:write",
@@ -35,6 +35,9 @@ export const TOKEN_SCOPES = [
   "ssh:read",
   "ssh:write",
   "settings:read",
+  "settings:write",
+  "organizations:read",
+  "organizations:write",
 ];
 
 export interface LoginDeps {

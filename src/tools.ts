@@ -90,7 +90,7 @@ export const PUBLISH_ADVISORY_409_HINT = `Conflict: advisory may already be publ
 export const TOKEN_401_HINT = `The token is invalid, expired or revoked. Run: ${LOGIN_COMMAND} (or set SATORI_TOKEN)`;
 
 export const TOKEN_403_HINT =
-  `The token is not allowed to do this. Saved parameters, secrets and organizations are changed in the dashboard. For a missing scope, run: ${LOGIN_COMMAND}`;
+  `The token is not allowed to do this. For a missing scope, run: ${LOGIN_COMMAND}. API tokens are managed in the dashboard.`;
 
 export function errorResult(e: unknown): Dict | null {
   if (e instanceof AuthError) return { error: `Not logged in. Run: ${LOGIN_COMMAND} (or set SATORI_TOKEN)` };

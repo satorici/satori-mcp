@@ -20,9 +20,10 @@ npx -y github:satorici/satori-mcp login
 ```
 
 The token is named `MCP (<hostname>)`, and logging in again replaces it. It has the scopes the
-tools call. It cannot change saved parameters, secrets or organizations, which take the
-dashboard. On a machine without a browser, create a token in the dashboard's API tokens page
-and run `login --paste` (hidden prompt), or pipe the token on stdin.
+tools call, saved parameters, secrets and organizations included. A token from before those
+had write scopes is refused there: log in again. On a machine without a browser, create a
+token in the dashboard's API tokens page and run `login --paste` (hidden prompt), or pipe the
+token on stdin.
 
 MCP client config:
 
