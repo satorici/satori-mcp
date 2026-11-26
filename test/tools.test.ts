@@ -1141,6 +1141,43 @@ describe("create_monitor", () => {
     ).toContain("visibility must be");
   });
 
+  it("sends container settings, tags and timeout only when given", async () => {
+    mockClient("postForm", () => "b9");
+    const post = mockClient("post", () => ({ id: pid(7), status: "RUNNING" }));
+    const playbook_yaml = "settings:\n  rate: 1 day\n  timeout: 300\ntest:\n  run: [echo x]\n";
+
+    await tools.createMonitor({ playbook_uri: "satori://a.yml", expression: "rate(1 day)" });
+    expect(post.mock.calls[0][1]).toEqual({
+      playbook_source: "satori://a.yml",
+      expression: "rate(1 day)",
+      parameters: {},
+      secrets: {},
+      regions: [],
+      visibility: "PRIVATE",
+      with_files: false,
+      tags: {},
+      execution_timeout: null,
+    });
+
+    await tools.createMonitor({ playbook_yaml });
+    expect((post.mock.calls[1][1] as any).execution_timeout).toBe(300);
+
+    await tools.createMonitor({
+      playbook_yaml,
+      cpu: 2048,
+      memory: 4096,
+      image: "python:3.13",
+      environment_variables: { DEBUG: "1" },
+      tags: { team: "red" },
+      timeout: 60,
+    });
+    expect(post.mock.calls[2][1]).toMatchObject({
+      container_settings: { cpu: 2048, memory: 4096, image: "python:3.13", environment_variables: { DEBUG: "1" } },
+      tags: { team: "red" },
+      execution_timeout: 60,
+    });
+  });
+
   it("run_playbook points a scheduled playbook at create_monitor", async () => {
     mockClient("postForm", () => "b9");
     mockClient("post", () => ({ id: pid(7), status: "QUEUED" }));
@@ -1989,6 +2026,28 @@ describe("run_local", () => {
     expect(runLocalJob.mock.calls[0][0]).toBe("bundle://b1");
     expect(runLocalJob.mock.calls[0][1]).toMatchObject({ workdir: tmp, run: ["a"], timeout: 300, repository: null });
     expect(write).not.toHaveBeenCalled();
+  });
+
+  it("passes tags and visibility to the local job", async () => {
+    const runLocalJob = vi
+      .spyOn(tools.deps, "runLocalJob")
+      .mockResolvedValue({ job: { id: pid(5) }, executionId: null, report: null, timedOut: false });
+    mockClient("postForm", () => "b1");
+
+    await tools.runLocal({ playbook_yaml: "cmd: [echo hi]\n", directory: tmp });
+    expect(runLocalJob.mock.calls[0][1]).toMatchObject({ tags: {}, visibility: "PRIVATE" });
+
+    await tools.runLocal({
+      playbook_yaml: "cmd: [echo hi]\n",
+      directory: tmp,
+      tags: { team: "red" },
+      visibility: "unlisted",
+    });
+    expect(runLocalJob.mock.calls[1][1]).toMatchObject({ tags: { team: "red" }, visibility: "UNLISTED" });
+
+    const refused = await tools.runLocal({ playbook_yaml: "cmd: [echo hi]\n", visibility: "CONTRIBUTORS" });
+    expect(refused.error).toContain("visibility must be");
+    expect(runLocalJob).toHaveBeenCalledTimes(2);
   });
 
   it("links the run to the origin repository of the working directory", async () => {

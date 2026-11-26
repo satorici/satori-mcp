@@ -560,16 +560,21 @@ export function monitorExpression(settings: Dict): string | null {
   return null;
 }
 
-export interface CreateMonitorArgs extends PlaybookSourceArgs {
+export interface CreateMonitorArgs
+  extends PlaybookSourceArgs,
+    Pick<ContainerSettingsArgs, "cpu" | "memory" | "image" | "environment_variables"> {
   expression?: string | null;
   parameters?: Record<string, string[]> | null;
   secrets?: Record<string, string> | null;
   regions?: string[] | null;
+  tags?: Record<string, string> | null;
+  timeout?: number | null;
   visibility?: string | null;
 }
 
 export const createMonitor = safe(async (args: CreateMonitorArgs): Promise<Dict> => {
-  const expression = args.expression || monitorExpression(playbookSettings(args));
+  const settings = playbookSettings(args);
+  const expression = args.expression || monitorExpression(settings);
   if (!expression) {
     return {
       error:
@@ -580,7 +585,7 @@ export const createMonitor = safe(async (args: CreateMonitorArgs): Promise<Dict>
   if (!VISIBILITIES.includes(visibility)) return oneOf("visibility", VISIBILITIES);
 
   const source = await bundleSource(args.playbook_path, args.playbook_yaml, args.playbook_uri);
-  const monitor = await client.post("/jobs/monitors", {
+  const body: Dict = {
     playbook_source: source,
     expression,
     parameters: args.parameters || {},
@@ -588,7 +593,12 @@ export const createMonitor = safe(async (args: CreateMonitorArgs): Promise<Dict>
     regions: args.regions || [],
     visibility,
     with_files: false,
-  });
+    tags: args.tags || {},
+    execution_timeout: args.timeout ?? playbookTimeout(settings),
+  };
+  const container = containerSettings(args);
+  if (container) body.container_settings = container;
+  const monitor = await client.post("/jobs/monitors", body);
   return {
     ...shaping.summarizeJob(monitor),
     hint: "Runs on its schedule (UTC). See its reports with list_executions(job_id=...); delete them with clean_monitor.",
@@ -600,6 +610,8 @@ export interface RunLocalArgs extends PlaybookSourceArgs {
   directory?: string | null;
   parameters?: Record<string, string[]> | null;
   run?: string[] | null;
+  tags?: Record<string, string> | null;
+  visibility?: string | null;
   timeout_seconds?: number;
 }
 
@@ -611,6 +623,8 @@ export const runLocal = safe(async (args: RunLocalArgs = {}): Promise<Dict> => {
   if (directory && !isDir(expandUser(directory))) {
     return { error: `directory must be an existing directory: ${directory}` };
   }
+  const visibility = (args.visibility ?? "PRIVATE").toUpperCase();
+  if (!VISIBILITIES.includes(visibility)) return oneOf("visibility", VISIBILITIES);
 
   const source = await bundleSource(args.playbook_path, args.playbook_yaml, args.playbook_uri);
   const timeout = clamp(timeoutSeconds, 1, LOCAL_MAX_TIMEOUT);
@@ -626,6 +640,8 @@ export const runLocal = safe(async (args: RunLocalArgs = {}): Promise<Dict> => {
     }
     outcome = await deps.runLocalJob(source, {
       parameters: args.parameters || {},
+      tags: args.tags || {},
+      visibility,
       // `repository` names it; otherwise it is the checkout the commands run in.
       repository: repository || (await deps.originRepository(workdir)),
       workdir,

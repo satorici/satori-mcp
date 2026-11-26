@@ -274,7 +274,8 @@ playbook_path, playbook_yaml or playbook_uri. Working directory: \`repository\`
 ("owner/repo", shallow-cloned to a temp dir) OR \`directory\` (existing local dir);
 default is the server's current directory. Without \`repository\`, the run is linked to the
 GitHub repo of the working directory's git \`origin\` remote, if any. \`run\` limits execution to test paths with
-those prefixes. timeout_seconds max 3600.
+those prefixes. timeout_seconds max 3600. \`tags\` are key -> value words to find the run with
+later; visibility: PUBLIC, PRIVATE or UNLISTED (default PRIVATE).
 Returns the same shape as run_playbook; analyze with get_execution_output and list_findings.`,
     {
       ...playbookSource,
@@ -282,6 +283,8 @@ Returns the same shape as run_playbook; analyze with get_execution_output and li
       directory: optStr(),
       parameters: parameters(),
       run: z.array(z.string()).nullish(),
+      tags: z.record(z.string(), z.string()).nullish(),
+      visibility: optStr(),
       timeout_seconds: int().default(tools.LOCAL_DEFAULT_TIMEOUT),
     },
     (args) => tools.runLocal(args),
@@ -880,13 +883,24 @@ Only when the user asked. Provide EXACTLY ONE of playbook_path, playbook_yaml or
 \`expression\` is rate(N minute|hour|day[s]) or cron(<5-field cron>), e.g. rate(1 hour) or
 cron(0 3 * * *). Without it the playbook's settings.monitor, settings.rate or settings.cron is
 used (a catalog playbook_uri needs an explicit expression). visibility: PUBLIC, PRIVATE or
-UNLISTED (default PRIVATE). Saved parameters/secrets are added automatically.`,
+UNLISTED (default PRIVATE). Saved parameters/secrets are added automatically.
+Container (cpu, memory and environment_variables need a PRO or ENTERPRISE plan; image works on
+any plan): cpu (256, 512, 1024, 2048, 4096, 8192 or 16384; default 1024), memory in MiB
+(default 2048; must be a valid Fargate pair with cpu), image (default ubuntu:noble).
+\`tags\` are key -> value words on every report of the monitor. \`timeout\` is each execution's
+limit in seconds (default: the playbook's settings.timeout).`,
     {
       ...playbookSource,
       expression: optStr(),
       parameters: parameters(),
       secrets: secrets(),
       regions: z.array(z.string()).nullish(),
+      cpu: optInt(),
+      memory: optInt(),
+      image: optStr(),
+      environment_variables: z.record(z.string(), z.string()).nullish(),
+      tags: z.record(z.string(), z.string()).nullish(),
+      timeout: optInt(),
       visibility: optStr(),
     },
     (args) => tools.createMonitor(args),
