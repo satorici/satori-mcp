@@ -22,6 +22,7 @@ it("exposes every tool, resource and prompt of the Python server", async () => {
     [
       "whoami",
       "get_settings",
+      "update_settings",
       "recommend_playbook",
       "run_playbook",
       "run_local",

@@ -83,9 +83,9 @@ function expandUser(path: string): string {
 const isDir = (path: string) => existsSync(path) && statSync(path).isDirectory();
 const isFile = (path: string) => existsSync(path) && statSync(path).isFile();
 
-export const AI_ANALYSIS_409_HINT = `The user has to choose an AI provider and store its API key at ${SETTINGS_URL} first; get_settings shows what is missing.`;
+export const AI_ANALYSIS_409_HINT = `An AI provider and its API key have to be set first: get_settings shows what is missing. The user sets them at ${SETTINGS_URL}, or gives them to you for update_settings.`;
 
-export const PUBLISH_ADVISORY_409_HINT = `Conflict: advisory may already be published, or no GitHub PAT is stored at ${SETTINGS_URL} (see get_settings).`;
+export const PUBLISH_ADVISORY_409_HINT = `Conflict: advisory may already be published, or no GitHub PAT is stored (see get_settings; set at ${SETTINGS_URL} or with update_settings).`;
 
 export const TOKEN_401_HINT = `The token is invalid, expired or revoked. Run: ${LOGIN_COMMAND} (or set SATORI_TOKEN)`;
 
@@ -154,8 +154,8 @@ export const whoami = safe(async (): Promise<Dict> => {
   };
 });
 
-export const getSettings = safe(async (): Promise<Dict> => {
-  const settings = await client.get("/settings");
+/** Settings as the tools show them: which secrets are stored, never their values. */
+function shapeSettings(settings: Dict): Dict {
   const ai = settings.ai ?? {};
   const provider: string | null = ai.provider ?? null;
   const withKey = Object.entries<Dict>(ai.credentials ?? {})
@@ -165,6 +165,7 @@ export const getSettings = safe(async (): Promise<Dict> => {
   const aiReady = provider !== null && withKey.includes(provider);
 
   const result: Dict = {
+    name: settings.profile?.name ?? null,
     github_pat_configured: githubPat,
     ai: {
       provider,
@@ -188,9 +189,60 @@ export const getSettings = safe(async (): Promise<Dict> => {
   }
   if (!githubPat) missing.push("no GitHub PAT is stored (publishing advisories and issues is refused)");
   if (missing.length) {
-    result.hint = `Missing: ${missing.join("; ")}. Only the user can change settings, at settings_url or with \`satori-v2 settings\`.`;
+    result.hint = `Missing: ${missing.join("; ")}. The user sets them at settings_url, or gives you the values for update_settings.`;
   }
   return result;
+}
+
+export const getSettings = safe(async (): Promise<Dict> => shapeSettings(await client.get("/settings")));
+
+export const AI_PROVIDERS = ["anthropic", "openai", "openrouter"];
+
+export interface UpdateSettingsArgs {
+  github_token?: string | null;
+  ai_provider?: string | null;
+  ai_model_id?: string | null;
+  ai_api_keys?: Record<string, string | null> | null;
+  notify?: Record<string, string | null> | null;
+  name?: string | null;
+  automatically_open_fix_prs?: boolean | null;
+}
+
+/** null clears a setting and a missing argument leaves it alone, so the two are told apart here. */
+export const updateSettings = safe(async (args: UpdateSettingsArgs = {}): Promise<Dict> => {
+  const body: Dict = {};
+  if (args.github_token !== undefined) body.github = { token: args.github_token };
+  if (args.name !== undefined) body.profile = { name: args.name };
+  if (args.notify) body.notify = args.notify;
+  if (typeof args.automatically_open_fix_prs === "boolean") {
+    body.automation = { automatically_open_fix_prs: args.automatically_open_fix_prs };
+  }
+
+  const ai: Dict = {};
+  if (args.ai_api_keys) {
+    const unknown = Object.keys(args.ai_api_keys).find((provider) => !AI_PROVIDERS.includes(provider));
+    if (unknown) return oneOf("ai_api_keys provider", AI_PROVIDERS);
+    ai.credentials = args.ai_api_keys;
+  }
+  if (args.ai_provider === null) {
+    if (args.ai_model_id) return { error: "ai_model_id needs an ai_provider." };
+    ai.provider = null;
+  } else if (args.ai_provider !== undefined || args.ai_model_id) {
+    // The API takes the provider and its model together
+    const current = (await client.get("/settings")).ai ?? {};
+    const provider = args.ai_provider ?? current.provider;
+    if (!provider) return { error: "Select a provider first: pass ai_provider with ai_model_id." };
+    if (!AI_PROVIDERS.includes(provider)) return oneOf("ai_provider", AI_PROVIDERS);
+    const models: string[] = current.models?.[provider] ?? [];
+    const model = args.ai_model_id ?? (models.includes(current.model_id) ? current.model_id : models[0]);
+    if (!model) return { error: `No models available for provider ${provider}.` };
+    ai.provider = provider;
+    ai.model_id = model;
+  }
+  if (Object.keys(ai).length) body.ai = ai;
+
+  if (!Object.keys(body).length) return { error: "Nothing to change: pass at least one setting." };
+  return shapeSettings(await client.patch("/settings", body));
 });
 
 export async function bundleSource(

@@ -1722,6 +1722,73 @@ describe("get_settings", () => {
   });
 });
 
+describe("update_settings", () => {
+  const current = {
+    github: { token: { configured: true } },
+    ai: {
+      provider: "anthropic",
+      model_id: "a1",
+      credentials: { anthropic: { configured: true } },
+      models: { anthropic: ["a1", "a2"], openai: ["o1", "o2"] },
+    },
+    notify: {},
+  };
+
+  it("sends only what was given and never echoes a secret", async () => {
+    const get = mockClient("get", () => current);
+    const patch = mockClient("patch", () => current);
+    const result = await tools.updateSettings({
+      github_token: "ghp_secret",
+      ai_api_keys: { openai: "sk-secret", anthropic: null },
+      notify: { email: "ada@x.io", discord: null },
+      name: "Ada",
+      automatically_open_fix_prs: true,
+    });
+    expect(patch.mock.calls[0]).toEqual([
+      "/settings",
+      {
+        github: { token: "ghp_secret" },
+        profile: { name: "Ada" },
+        notify: { email: "ada@x.io", discord: null },
+        automation: { automatically_open_fix_prs: true },
+        ai: { credentials: { openai: "sk-secret", anthropic: null } },
+      },
+    ]);
+    expect(get).not.toHaveBeenCalled();
+    expect(result.ai.ready).toBe(true);
+    expect(JSON.stringify(result)).not.toContain("secret");
+  });
+
+  it("clears a setting with null", async () => {
+    const patch = mockClient("patch", () => current);
+    await tools.updateSettings({ github_token: null, ai_provider: null });
+    expect(patch.mock.calls[0][1]).toEqual({ github: { token: null }, ai: { provider: null } });
+  });
+
+  it("picks the model that goes with the provider", async () => {
+    mockClient("get", () => current);
+    const patch = mockClient("patch", () => current);
+    await tools.updateSettings({ ai_provider: "openai" });
+    await tools.updateSettings({ ai_provider: "anthropic" });
+    await tools.updateSettings({ ai_model_id: "a2" });
+    await tools.updateSettings({ ai_provider: "openai", ai_model_id: "o2" });
+    expect(patch.mock.calls.map(([, body]) => (body as any).ai)).toEqual([
+      { provider: "openai", model_id: "o1" },
+      { provider: "anthropic", model_id: "a1" },
+      { provider: "anthropic", model_id: "a2" },
+      { provider: "openai", model_id: "o2" },
+    ]);
+  });
+
+  it("refuses what it cannot send", async () => {
+    mockClient("get", () => ({ ai: { provider: null, models: {} } }));
+    expect((await tools.updateSettings({})).error).toContain("Nothing to change");
+    expect((await tools.updateSettings({ ai_provider: "nope" })).error).toContain("ai_provider must be one of");
+    expect((await tools.updateSettings({ ai_model_id: "m" })).error).toContain("Select a provider first");
+    expect((await tools.updateSettings({ ai_api_keys: { nope: "k" } })).error).toContain("must be one of");
+  });
+});
+
 it("generate_finding_fix points at Settings only when the AI settings are the problem", async () => {
   const { HttpStatusError } = await import("../src/errors.js");
   mockClient("request", () => {

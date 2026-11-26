@@ -22,7 +22,8 @@ export const INSTRUCTIONS =
   "do not call update_finding_status unless the user asked to triage. " +
   "generate_finding_fix writes a fix for a confirmed finding and open_finding_fix_pull_request opens its " +
   "pull request on GitHub (each only when asked); get_finding_fix reads the latest fix and its diff. " +
-  "get_settings shows whether the AI key and GitHub PAT those need are set; only the user changes settings, in the dashboard. " +
+  "get_settings shows whether the AI key and GitHub PAT those need are set; update_settings changes settings (only when asked, " +
+  "and only with values the user gave you). " +
   "create_security_advisory / publish_security_advisory / publish_issue / publish_report / update_advisory / " +
   "update_advisory_visibility / delete_security_advisory only when asked; get_advisory, get_advisory_status " +
   "and get_report_channel are read-only. publish_report picks advisory or issue for the repository. " +
@@ -131,10 +132,46 @@ export function createServer(): McpServer {
     `The account's settings (read-only): whether a GitHub PAT is stored, the AI provider and model,
 which providers have an API key, whether AI is \`ready\` (analyze_finding, analyze_execution and
 generate_finding_fix are refused otherwise), and the notification destinations.
-Secrets are never returned. Settings cannot be changed from here: when something is missing,
-tell the user to set it at \`settings_url\` or with \`satori-v2 settings\`.`,
+Secrets are never returned. When something is missing, the user sets it at \`settings_url\`, or
+gives you the value for update_settings.`,
     {},
     () => tools.getSettings(),
+  );
+
+  tool(
+    "update_settings",
+    `Change the account's settings. Only when the user asked, and only with values they gave you:
+never invent, guess or reuse a token or key from elsewhere.
+
+Pass only what changes; null clears a setting. github_token: the GitHub PAT used to publish
+advisories and issues. ai_provider: anthropic, openai or openrouter (its model stays, or
+becomes the provider's first one, unless ai_model_id is given; see get_settings \`ai.models\`).
+ai_model_id alone changes the model of the current provider. ai_api_keys: provider -> API key.
+notify: any of default (slack, email, discord or telegram), email, slack_workspace,
+slack_channel, discord, telegram. name: the profile's display name.
+automatically_open_fix_prs: open a pull request for each fix without asking.
+Returns the settings as get_settings does; stored secrets are never echoed.`,
+    {
+      github_token: optStr(),
+      ai_provider: optStr(),
+      ai_model_id: optStr(),
+      ai_api_keys: z.record(z.string(), z.string().nullable()).nullish(),
+      notify: z
+        .object({
+          default: z.enum(["slack", "email", "discord", "telegram"]).nullable(),
+          email: z.string().nullable(),
+          slack_workspace: z.string().nullable(),
+          slack_channel: z.string().nullable(),
+          discord: z.string().nullable(),
+          telegram: z.string().nullable(),
+        })
+        .partial()
+        .strict()
+        .nullish(),
+      name: optStr(),
+      automatically_open_fix_prs: z.boolean().nullish(),
+    },
+    (args) => tools.updateSettings(args),
   );
 
   tool(
