@@ -1675,6 +1675,68 @@ describe("whoami", () => {
   });
 });
 
+describe("get_settings", () => {
+  it("reports what is configured without a hint", async () => {
+    mockClient("get", () => ({
+      profile: { name: "Ada", email: "ada@x.io" },
+      github: { token: { configured: true } },
+      ai: {
+        provider: "anthropic",
+        model_id: "m1",
+        credentials: { anthropic: { configured: true }, openai: { configured: false } },
+        models: { anthropic: ["m1"], openai: ["m2"] },
+      },
+      notify: { default: "email", email: "ada@x.io", slack_workspace: null },
+      automation: { automatically_open_fix_prs: true },
+    }));
+    const result = await tools.getSettings();
+    expect(result).toMatchObject({
+      github_pat_configured: true,
+      ai: { provider: "anthropic", model_id: "m1", credentials_configured: ["anthropic"], ready: true },
+      notify: { default: "email", email: "ada@x.io" },
+      automatically_open_fix_prs: true,
+    });
+    expect(result.settings_url).toMatch(/\/settings$/);
+    expect(result).not.toHaveProperty("hint");
+  });
+
+  it("says what is missing and where the user sets it", async () => {
+    mockClient("get", () => ({
+      github: { token: { configured: false } },
+      ai: { provider: null, model_id: null, credentials: { openai: { configured: true } }, models: {} },
+      notify: {},
+    }));
+    const unset = await tools.getSettings();
+    expect(unset.ai.ready).toBe(false);
+    expect(unset.hint).toContain("no AI provider is selected");
+    expect(unset.hint).toContain("no GitHub PAT");
+
+    mockClient("get", () => ({
+      github: { token: { configured: true } },
+      ai: { provider: "anthropic", credentials: { openai: { configured: true } } },
+    }));
+    const noKey = await tools.getSettings();
+    expect(noKey.ai.ready).toBe(false);
+    expect(noKey.hint).toContain("no API key is stored for the AI provider anthropic");
+    expect(noKey.hint).not.toContain("GitHub PAT");
+  });
+});
+
+it("generate_finding_fix points at Settings only when the AI settings are the problem", async () => {
+  const { HttpStatusError } = await import("../src/errors.js");
+  mockClient("request", () => {
+    throw new HttpStatusError(409, '{"detail":"No API key stored for this provider"}', "http://x");
+  });
+  expect((await tools.generateFindingFix({ finding_id: pid(3) })).hint).toBe(tools.AI_ANALYSIS_409_HINT);
+
+  mockClient("request", () => {
+    throw new HttpStatusError(409, '{"detail":"The fix already has a pull request"}', "http://x");
+  });
+  const other = await tools.generateFindingFix({ finding_id: pid(3) });
+  expect(other.status).toBe(409);
+  expect(other).not.toHaveProperty("hint");
+});
+
 describe("organizations", () => {
   it("lists organizations with the active one", async () => {
     vi.spyOn(config, "get").mockImplementation((key) => (key === "organization" ? 7 : undefined));

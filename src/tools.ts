@@ -13,7 +13,7 @@ import { parse as parseYaml } from "yaml";
 import { activeOrganization, client, playbooksClient } from "./api.js";
 import { makeBundle, uploadBundle } from "./bundle.js";
 import { config } from "./config.js";
-import { advisoryUrl, DOCS_URL, reportUrl } from "./constants.js";
+import { advisoryUrl, DOCS_URL, reportUrl, SETTINGS_URL } from "./constants.js";
 import { ApiTimeoutError, AuthError, HttpStatusError, SatoriError } from "./errors.js";
 import { LOGIN_COMMAND } from "./login.js";
 import { cloneRepo, originRepository, requireGit } from "./git.js";
@@ -83,11 +83,9 @@ function expandUser(path: string): string {
 const isDir = (path: string) => existsSync(path) && statSync(path).isDirectory();
 const isFile = (path: string) => existsSync(path) && statSync(path).isFile();
 
-export const AI_ANALYSIS_409_HINT =
-  "Configure an AI provider and API key in Settings (dashboard) before analyzing findings.";
+export const AI_ANALYSIS_409_HINT = `The user has to choose an AI provider and store its API key at ${SETTINGS_URL} first; get_settings shows what is missing.`;
 
-export const PUBLISH_ADVISORY_409_HINT =
-  "Conflict: advisory may already be published, or no GitHub PAT is configured in Settings.";
+export const PUBLISH_ADVISORY_409_HINT = `Conflict: advisory may already be published, or no GitHub PAT is stored at ${SETTINGS_URL} (see get_settings).`;
 
 export const TOKEN_401_HINT = `The token is invalid, expired or revoked. Run: ${LOGIN_COMMAND} (or set SATORI_TOKEN)`;
 
@@ -111,6 +109,12 @@ export function errorResult(e: unknown): Dict | null {
 
 function withAi409Hint(result: Dict): Dict {
   if (result.status === 409) result.hint = AI_ANALYSIS_409_HINT;
+  return result;
+}
+
+/** A fix is also refused with 409 for reasons that are not the AI settings, so only the API's own wording gets the hint. */
+function withAiSettingsHint(result: Dict): Dict {
+  if (result.status === 409 && /AI provider|API key/i.test(String(result.error))) result.hint = AI_ANALYSIS_409_HINT;
   return result;
 }
 
@@ -148,6 +152,45 @@ export const whoami = safe(async (): Promise<Dict> => {
     notify_email: (settings.notify ?? {}).email ?? null,
     github_pat_configured: ((settings.github ?? {}).token ?? {}).configured ?? null,
   };
+});
+
+export const getSettings = safe(async (): Promise<Dict> => {
+  const settings = await client.get("/settings");
+  const ai = settings.ai ?? {};
+  const provider: string | null = ai.provider ?? null;
+  const withKey = Object.entries<Dict>(ai.credentials ?? {})
+    .filter(([, status]) => status?.configured)
+    .map(([name]) => name);
+  const githubPat = Boolean(settings.github?.token?.configured);
+  const aiReady = provider !== null && withKey.includes(provider);
+
+  const result: Dict = {
+    github_pat_configured: githubPat,
+    ai: {
+      provider,
+      model_id: ai.model_id ?? null,
+      credentials_configured: withKey,
+      ready: aiReady,
+      models: ai.models ?? {},
+    },
+    notify: settings.notify ?? {},
+    automatically_open_fix_prs: settings.automation?.automatically_open_fix_prs ?? null,
+    settings_url: SETTINGS_URL,
+  };
+
+  const missing: string[] = [];
+  if (!aiReady) {
+    missing.push(
+      provider === null
+        ? "no AI provider is selected (AI analysis and AI fixes are refused)"
+        : `no API key is stored for the AI provider ${provider} (AI analysis and AI fixes are refused)`,
+    );
+  }
+  if (!githubPat) missing.push("no GitHub PAT is stored (publishing advisories and issues is refused)");
+  if (missing.length) {
+    result.hint = `Missing: ${missing.join("; ")}. Only the user can change settings, at settings_url or with \`satori-v2 settings\`.`;
+  }
+  return result;
 });
 
 export async function bundleSource(
@@ -1038,7 +1081,7 @@ export const getFindingFix = safe(async ({ finding_id: id }: { finding_id: strin
   }
 });
 
-export const generateFindingFix = safe(async (args: AnalyzeFindingArgs): Promise<Dict> => {
+const _generateFindingFix = safe(async (args: AnalyzeFindingArgs): Promise<Dict> => {
   const { finding_id: id, force = false, wait = true, wait_seconds: waitSeconds = AI_ANALYSIS_DEFAULT_WAIT } = args;
   const path = `/findings/${id}/fix`;
   let fix = await queueFindingAiJob(path, force);
@@ -1048,6 +1091,9 @@ export const generateFindingFix = safe(async (args: AnalyzeFindingArgs): Promise
   }
   return shaping.summarizeFix(fix);
 });
+
+export const generateFindingFix = async (args: AnalyzeFindingArgs): Promise<Dict> =>
+  withAiSettingsHint(await _generateFindingFix(args));
 
 export const openFindingFixPullRequest = safe(async ({ finding_id: id }: { finding_id: string }): Promise<Dict> =>
   shaping.summarizeFix(await client.post(`/findings/${id}/fix/pull-request`, undefined)),

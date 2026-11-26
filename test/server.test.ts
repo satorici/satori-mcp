@@ -21,6 +21,7 @@ it("exposes every tool, resource and prompt of the Python server", async () => {
   expect(listed.map((t) => t.name).sort()).toEqual(
     [
       "whoami",
+      "get_settings",
       "recommend_playbook",
       "run_playbook",
       "run_local",

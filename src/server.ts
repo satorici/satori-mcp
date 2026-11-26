@@ -22,6 +22,7 @@ export const INSTRUCTIONS =
   "do not call update_finding_status unless the user asked to triage. " +
   "generate_finding_fix writes a fix for a confirmed finding and open_finding_fix_pull_request opens its " +
   "pull request on GitHub (each only when asked); get_finding_fix reads the latest fix and its diff. " +
+  "get_settings shows whether the AI key and GitHub PAT those need are set; only the user changes settings, in the dashboard. " +
   "create_security_advisory / publish_security_advisory / publish_issue / publish_report / update_advisory / " +
   "update_advisory_visibility / delete_security_advisory only when asked; get_advisory, get_advisory_status " +
   "and get_report_channel are read-only. publish_report picks advisory or issue for the repository. " +
@@ -123,6 +124,17 @@ export function createServer(): McpServer {
 
   tool("whoami", "Show which Satori account, profile and endpoint this server is using.", {}, () =>
     tools.whoami(),
+  );
+
+  tool(
+    "get_settings",
+    `The account's settings (read-only): whether a GitHub PAT is stored, the AI provider and model,
+which providers have an API key, whether AI is \`ready\` (analyze_finding, analyze_execution and
+generate_finding_fix are refused otherwise), and the notification destinations.
+Secrets are never returned. Settings cannot be changed from here: when something is missing,
+tell the user to set it at \`settings_url\` or with \`satori-v2 settings\`.`,
+    {},
+    () => tools.getSettings(),
   );
 
   tool(

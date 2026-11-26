@@ -12,6 +12,8 @@ export const DASHBOARD_URL = process.env.SATORI_DASHBOARD_URL ?? "https://dashbo
 
 export const DOCS_URL = (process.env.SATORI_DOCS_URL ?? "https://docs-v2.satori.ci").replace(/\/+$/, "");
 
+export const SETTINGS_URL = `${DASHBOARD_URL}/settings`;
+
 export function reportUrl(executionId: string): string {
   return `${DASHBOARD_URL}/reports/${executionId}`;
 }
