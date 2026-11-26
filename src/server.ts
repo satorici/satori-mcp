@@ -556,13 +556,22 @@ skipping repositories without one). \`quantity\` is how many executions to creat
 (max 10; always 1 per repository for "owner/*"). Poll with get_job(job_id) /
 list_executions(job_id=...); results via get_execution.
 \`secrets\` work as in run_playbook; saved parameters/secrets for each repository are
-added automatically.`,
+added automatically.
+Container (cpu, memory and environment_variables need a PRO or ENTERPRISE plan; image works on
+any plan): cpu (256, 512, 1024, 2048, 4096, 8192 or 16384; default 1024), memory in MiB
+(default 2048; must be a valid Fargate pair with cpu), image (default ubuntu:noble).
+visibility: PUBLIC, PRIVATE or UNLISTED (default PRIVATE).`,
     {
       repository: z.string(),
       ...playbookSource,
       parameters: parameters(),
       secrets: secrets(),
       regions: z.array(z.string()).nullish(),
+      cpu: optInt(),
+      memory: optInt(),
+      image: optStr(),
+      environment_variables: z.record(z.string(), z.string()).nullish(),
+      visibility: optStr(),
       quantity: int().default(1),
     },
     (args) => tools.scanRepository(args),

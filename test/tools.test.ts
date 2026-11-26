@@ -909,6 +909,37 @@ describe("scan_repository", () => {
     await tools.scanRepository({ repository: "o/r", secrets: { TOKEN: "x" } });
     expect(seen.secrets).toEqual({ TOKEN: "x" });
   });
+
+  it("sends container settings and visibility only when given", async () => {
+    const post = mockClient("post", () => ({ id: pid(6), status: "QUEUED" }));
+    await tools.scanRepository({ repository: "o/r" });
+    expect(post.mock.calls[0][1]).toEqual({
+      parameters: {},
+      secrets: {},
+      regions: [],
+      repository_data: { repository: "o/r" },
+      criteria: { quantity: 1 },
+      visibility: "PRIVATE",
+    });
+
+    await tools.scanRepository({
+      repository: "o/r",
+      cpu: 2048,
+      memory: 4096,
+      image: "python:3.13",
+      environment_variables: { DEBUG: "1" },
+      visibility: "unlisted",
+    });
+    expect(post.mock.calls[1][1]).toMatchObject({
+      container_settings: { cpu: 2048, memory: 4096, image: "python:3.13", environment_variables: { DEBUG: "1" } },
+      visibility: "UNLISTED",
+    });
+  });
+
+  it("rejects an unknown visibility before calling the API", async () => {
+    const result = await tools.scanRepository({ repository: "o/r", visibility: "CONTRIBUTORS" });
+    expect(result.error).toContain("visibility must be");
+  });
 });
 
 describe("scan lifecycle", () => {

@@ -1151,11 +1151,14 @@ export const deleteJob = safe(async ({ job_id: id }: { job_id: string }): Promis
   return { job_id: id, type: job.type ?? null, deleted: true };
 });
 
-export interface ScanRepositoryArgs extends PlaybookSourceArgs {
+export interface ScanRepositoryArgs
+  extends PlaybookSourceArgs,
+    Pick<ContainerSettingsArgs, "cpu" | "memory" | "image" | "environment_variables"> {
   repository: string;
   parameters?: Record<string, string[]> | null;
   secrets?: Record<string, string> | null;
   regions?: string[] | null;
+  visibility?: string | null;
   quantity?: number;
 }
 
@@ -1165,6 +1168,8 @@ export const scanRepository = safe(async (args: ScanRepositoryArgs): Promise<Dic
   if (!wildcard && !isGithubRepo(repository)) return { error: "repository must be 'owner/repo' or 'owner/*'." };
   const provided = [args.playbook_path, args.playbook_yaml, args.playbook_uri].filter(Boolean).length;
   if (provided > 1) return { error: "Provide at most one of playbook_path, playbook_yaml or playbook_uri." };
+  const visibility = (args.visibility ?? "PRIVATE").toUpperCase();
+  if (!VISIBILITIES.includes(visibility)) return oneOf("visibility", VISIBILITIES);
   const source =
     provided === 1 ? await bundleSource(args.playbook_path, args.playbook_yaml, args.playbook_uri) : null;
   const quantity = wildcard ? 1 : clamp(args.quantity ?? 1, 1, MAX_SCAN_QUANTITY);
@@ -1174,9 +1179,11 @@ export const scanRepository = safe(async (args: ScanRepositoryArgs): Promise<Dic
     regions: args.regions || [],
     repository_data: { repository },
     criteria: { quantity },
-    visibility: "PRIVATE",
+    visibility,
   };
   if (source !== null) body.playbook_source = source;
+  const container = containerSettings(args);
+  if (container) body.container_settings = container;
   const scan = await client.post("/jobs/scans", body);
   return {
     job_id: scan.id,
