@@ -163,13 +163,52 @@ Playbook syntax: read the satori-docs://playbooks/language resource first.
 For security/analysis tools, prefer JSON/JSONL stdout flags
 (satori-docs://playbooks/tool-output).
 \`secrets\` (NAME -> value) are read like parameters (\${{NAME}}) but never stored with
-the job and redacted from output; saved parameters/secrets are added automatically.`,
+the job and redacted from output; saved parameters/secrets are added automatically.
+\`parameters\` is NAME -> list of values (pass a list already split, there is no delimiter
+option); \`parameter_files\` (NAME -> local path) adds each non-empty line of a file as one
+more value, for lists too long to pass inline.
+Container (cpu, memory and environment_variables need a PRO or ENTERPRISE plan; image works on
+any plan): cpu (256, 512, 1024, 2048, 4096, 8192 or 16384; default 1024), memory in MiB
+(default 2048; must be a valid Fargate pair with cpu), image (default ubuntu:noble).
+\`tags\` are key -> value words to find the run with later (list_executions tags "key:value").
+\`timeout\` is the execution's limit in seconds (default: the playbook's settings.timeout).
+\`expire\` deletes the report after "N hours", "N days" or "N weeks".
+\`notify\` replaces the playbook's settings.notify: each rule has \`to\` (slack://WORKSPACE:CHANNEL,
+email://user@example.com, discord://CHANNEL or telegram://CHAT_ID) and optionally \`result\`
+(pass or fail; both when omitted), \`severity\` and \`watch\` (finish, the default, and/or
+issue-status, which fires when a finding is marked TP).
+visibility: PUBLIC, PRIVATE or UNLISTED (default PRIVATE). \`count\` runs the playbook that many
+times (ENTERPRISE only above 1); the result then lists execution_ids and waits on the first.
+delete_report / delete_output drop the report or the output once the run ends, so
+get_execution / get_execution_output have nothing to show for it; only when the user asked.`,
     {
       ...playbookSource,
       repository: optStr(),
       parameters: parameters(),
+      parameter_files: z.record(z.string(), z.string()).nullish(),
       secrets: secrets(),
       regions: z.array(z.string()).nullish(),
+      cpu: optInt(),
+      memory: optInt(),
+      image: optStr(),
+      environment_variables: z.record(z.string(), z.string()).nullish(),
+      tags: z.record(z.string(), z.string()).nullish(),
+      timeout: optInt(),
+      expire: optStr(),
+      notify: z
+        .array(
+          z.object({
+            to: z.string().min(1),
+            result: z.enum(["pass", "fail"]).nullish(),
+            severity: z.array(z.enum(["info", "low", "medium", "high", "critical", "blocker"])).nullish(),
+            watch: z.array(z.enum(["issue-status", "finish"])).min(1).nullish(),
+          }),
+        )
+        .nullish(),
+      visibility: optStr(),
+      count: int().default(1),
+      delete_report: z.boolean().default(false),
+      delete_output: z.boolean().default(false),
       wait: z.boolean().default(true),
       wait_seconds: int().default(120),
     },

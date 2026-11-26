@@ -53,6 +53,8 @@ export const ADVISORY_PROVIDERS = ["GITHUB"];
 export const ADVISORY_LAST_WORDS = ["REPORTER", "OTHER", "NONE"];
 export const ADVISORY_ORDER_BY = ["created_at", "reported_at", "last_comment_at"];
 export const MAX_SCAN_QUANTITY = 10;
+/** How many of a run's executions run_playbook lists when count > 1. */
+const MAX_RUN_EXECUTION_IDS = 100;
 export const LOCAL_DEFAULT_TIMEOUT = 300;
 export const LOCAL_MAX_TIMEOUT = 3600;
 export const MAX_AI_ANALYSIS_FINDING_IDS = 20;
@@ -186,13 +188,52 @@ export async function bundleSource(
   return uploadBundle(bundle);
 }
 
-async function firstExecutionId(jobId: string, attempts = 15): Promise<string | null> {
+/** The job's first `quantity` executions, oldest first; fewer when they don't show up in time. */
+async function jobExecutionIds(jobId: string, quantity = 1, attempts = 15): Promise<string[]> {
+  let ids: string[] = [];
   for (let i = 0; i < attempts; i++) {
-    const { items } = await client.get("/executions", { job_id: jobId, quantity: 1 });
-    if (items.length) return items[0].id;
+    const { items } = await client.get("/executions", { job_id: jobId, quantity, order: "ASC" });
+    ids = items.map((item: Dict) => item.id);
+    if (ids.length >= quantity) break;
     await deps.sleep(1000);
   }
-  return null;
+  return ids;
+}
+
+export interface ContainerSettingsArgs {
+  cpu?: number | null;
+  memory?: number | null;
+  storage?: number | null;
+  image?: string | null;
+  os?: string | null;
+  environment_variables?: Record<string, string> | null;
+}
+
+/** The settings the caller gave; the API fills in the rest, so an empty object is not sent. */
+function containerSettings(args: ContainerSettingsArgs): Dict | null {
+  const { cpu, memory, storage, image, os, environment_variables } = args;
+  const given = Object.entries({ cpu, memory, storage, image, os, environment_variables }).filter(
+    ([, value]) => value !== null && value !== undefined,
+  );
+  return given.length ? Object.fromEntries(given) : null;
+}
+
+/** Like the CLI's --data-file: each non-empty line of a file is one more value of its parameter. */
+function withParameterFiles(
+  parameters: Record<string, string[]>,
+  files: Record<string, string>,
+): Record<string, string[]> {
+  const merged = Object.fromEntries(Object.entries(parameters).map(([name, values]) => [name, [...values]]));
+  for (const [name, given] of Object.entries(files)) {
+    const path = expandUser(given);
+    if (!isFile(path)) throw new SatoriError(`parameter_files.${name}: file not found: ${given}`);
+    const lines = readFileSync(path, "utf-8")
+      .split("\n")
+      .map((line) => line.replace(/\r$/, ""))
+      .filter(Boolean);
+    (merged[name] ??= []).push(...lines);
+  }
+  return merged;
 }
 
 export async function executionSummary(executionId: string): Promise<Dict> {
@@ -308,38 +349,72 @@ export interface PlaybookSourceArgs {
   playbook_uri?: string | null;
 }
 
-export interface RunPlaybookArgs extends PlaybookSourceArgs {
+export interface NotifyRule {
+  to: string;
+  result?: "pass" | "fail" | null;
+  severity?: string[] | null;
+  watch?: string[] | null;
+}
+
+export interface RunPlaybookArgs
+  extends PlaybookSourceArgs,
+    Pick<ContainerSettingsArgs, "cpu" | "memory" | "image" | "environment_variables"> {
   repository?: string | null;
   parameters?: Record<string, string[]> | null;
+  parameter_files?: Record<string, string> | null;
   secrets?: Record<string, string> | null;
   regions?: string[] | null;
+  tags?: Record<string, string> | null;
+  timeout?: number | null;
+  expire?: string | null;
+  notify?: NotifyRule[] | null;
+  visibility?: string | null;
+  count?: number;
+  delete_report?: boolean;
+  delete_output?: boolean;
   wait?: boolean;
   wait_seconds?: number;
 }
 
 export const runPlaybook = safe(async (args: RunPlaybookArgs = {}): Promise<Dict> => {
-  const { wait = true, wait_seconds: waitSeconds = 120 } = args;
+  const { wait = true, wait_seconds: waitSeconds = 120, count = 1 } = args;
+  const visibility = (args.visibility ?? "PRIVATE").toUpperCase();
+  if (!VISIBILITIES.includes(visibility)) return oneOf("visibility", VISIBILITIES);
+  if (count < 1) return { error: "count must be at least 1." };
+  const parameters = withParameterFiles(args.parameters || {}, args.parameter_files || {});
+
   const source = await bundleSource(args.playbook_path, args.playbook_yaml, args.playbook_uri);
-  const run = await client.post("/jobs/runs", {
+  const settings = playbookSettings(args);
+  const body: Dict = {
     playbook_source: source,
-    parameters: args.parameters || {},
+    parameters,
     secrets: args.secrets || {},
     regions: args.regions || [],
-    count: 1,
-    save_report: true,
-    save_output: true,
+    count,
+    save_report: !args.delete_report,
+    save_output: !args.delete_output,
     repository: args.repository ?? null,
-    visibility: "PRIVATE",
-  });
+    visibility,
+    tags: args.tags || {},
+    execution_timeout: args.timeout ?? playbookTimeout(settings),
+    expire: args.expire ?? null,
+    // null keeps the playbook's own settings.notify, a list replaces it
+    notify: args.notify?.length ? args.notify : null,
+  };
+  const container = containerSettings(args);
+  if (container) body.container_settings = container;
+  const run = await client.post("/jobs/runs", body);
   const jobId = run.id;
   const result: Dict = { job_id: jobId, status: run.status ?? null, playbook_source: source };
-  const schedule = monitorExpression(playbookSettings(args));
+  const schedule = monitorExpression(settings);
   if (schedule) {
     result.monitor_hint = `The playbook has a schedule (${schedule}); this ran it once. Use create_monitor to schedule it.`;
   }
 
-  const executionId = await firstExecutionId(jobId);
+  const executionIds = await jobExecutionIds(jobId, Math.min(count, MAX_RUN_EXECUTION_IDS));
+  const executionId = executionIds[0] ?? null;
   result.execution_id = executionId;
+  if (count > 1) result.execution_ids = executionIds;
   if (executionId) result.report_url = reportUrl(executionId);
 
   if (!wait || executionId === null) {
@@ -374,6 +449,12 @@ function playbookSettings({ playbook_yaml: yaml, playbook_path: path }: Playbook
   } catch {
     return {};
   }
+}
+
+/** The playbook's `settings.timeout` in seconds, the run's timeout when none is given. */
+function playbookTimeout(settings: Dict): number | null {
+  const timeout = Number(settings.timeout ?? NaN);
+  return Number.isInteger(timeout) ? timeout : null;
 }
 
 /** Like the CLI's `monitor_expression`: settings.monitor as is, else rate(...) or cron(...). */
@@ -1719,13 +1800,7 @@ export const SSH_EXEC_READY_WAIT_MS = 120_000;
 /** Lifetime of the JWT from GET /executions/{id}/ssh. */
 const SSH_TOKEN_TTL_SECONDS = 300;
 
-export interface CreateSshSessionArgs {
-  cpu?: number | null;
-  memory?: number | null;
-  storage?: number | null;
-  image?: string | null;
-  os?: string | null;
-  environment_variables?: Record<string, string> | null;
+export interface CreateSshSessionArgs extends ContainerSettingsArgs {
   regions?: string[] | null;
   timeout?: number | null;
   save_files?: boolean;
@@ -1735,19 +1810,9 @@ export interface CreateSshSessionArgs {
 
 export const createSshSession = safe(async (args: CreateSshSessionArgs = {}): Promise<Dict> => {
   const { wait = true, wait_seconds: waitSeconds = 300 } = args;
-  const settings: Dict = {
-    cpu: args.cpu,
-    memory: args.memory,
-    storage: args.storage,
-    image: args.image,
-    os: args.os,
-    environment_variables: args.environment_variables,
-  };
-  const containerSettings = Object.fromEntries(
-    Object.entries(settings).filter(([, v]) => v !== null && v !== undefined),
-  );
   const body: Dict = { save_files: args.save_files ?? false };
-  if (Object.keys(containerSettings).length) body.container_settings = containerSettings;
+  const container = containerSettings(args);
+  if (container) body.container_settings = container;
   if (args.regions?.length) body.regions = args.regions;
   if (args.timeout !== null && args.timeout !== undefined) body.timeout = args.timeout;
 

@@ -95,6 +95,108 @@ describe("run_playbook", () => {
     await tools.runPlaybook({ playbook_uri: "satori://a.yml", wait: false });
     expect((post.mock.calls[1][1] as any).secrets).toEqual({});
   });
+
+  it("sends the API defaults when no option is given", async () => {
+    const post = mockClient("post", () => ({ id: pid(1), status: "QUEUED" }));
+    mockClient("get", () => ({ items: [] }));
+    const result = await tools.runPlaybook({ playbook_uri: "satori://a.yml", wait: false });
+    expect(post.mock.calls[0][1]).toEqual({
+      playbook_source: "satori://a.yml",
+      parameters: {},
+      secrets: {},
+      regions: [],
+      count: 1,
+      save_report: true,
+      save_output: true,
+      repository: null,
+      visibility: "PRIVATE",
+      tags: {},
+      execution_timeout: null,
+      expire: null,
+      notify: null,
+    });
+    expect(result).not.toHaveProperty("execution_ids");
+  });
+
+  it("sends the run options the CLI has", async () => {
+    const post = mockClient("post", () => ({ id: pid(1), status: "QUEUED" }));
+    mockClient("get", () => ({ items: [] }));
+    const notify = [{ to: "slack://W:C", result: "fail" as const, severity: ["high"], watch: ["finish"] }];
+    await tools.runPlaybook({
+      playbook_uri: "satori://a.yml",
+      cpu: 2048,
+      memory: 4096,
+      image: "python:3.13",
+      environment_variables: { DEBUG: "1" },
+      tags: { team: "red" },
+      timeout: 900,
+      expire: "2 days",
+      notify,
+      visibility: "unlisted",
+      delete_report: true,
+      delete_output: true,
+      wait: false,
+    });
+    expect(post.mock.calls[0][1]).toMatchObject({
+      container_settings: { cpu: 2048, memory: 4096, image: "python:3.13", environment_variables: { DEBUG: "1" } },
+      tags: { team: "red" },
+      execution_timeout: 900,
+      expire: "2 days",
+      notify,
+      visibility: "UNLISTED",
+      save_report: false,
+      save_output: false,
+    });
+  });
+
+  it("rejects an unknown visibility before calling the API", async () => {
+    const result = await tools.runPlaybook({ playbook_uri: "satori://a.yml", visibility: "CONTRIBUTORS" });
+    expect(result.error).toContain("visibility must be");
+  });
+
+  it("adds the lines of parameter_files to parameters", async () => {
+    const targets = join(tmp, "targets.txt");
+    writeFileSync(targets, "a.example\r\n\nb.example\n");
+    const post = mockClient("post", () => ({ id: pid(1), status: "QUEUED" }));
+    mockClient("get", () => ({ items: [] }));
+    await tools.runPlaybook({
+      playbook_uri: "satori://a.yml",
+      parameters: { HOST: ["z.example"], PORT: ["443"] },
+      parameter_files: { HOST: targets },
+      wait: false,
+    });
+    expect((post.mock.calls[0][1] as any).parameters).toEqual({
+      HOST: ["z.example", "a.example", "b.example"],
+      PORT: ["443"],
+    });
+
+    const missing = await tools.runPlaybook({
+      playbook_uri: "satori://a.yml",
+      parameter_files: { HOST: join(tmp, "nope.txt") },
+    });
+    expect(missing.error).toContain("parameter_files.HOST: file not found");
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes the timeout from the playbook's settings unless one is given", async () => {
+    mockClient("postForm", () => "b1");
+    const post = mockClient("post", () => ({ id: pid(1), status: "QUEUED" }));
+    mockClient("get", () => ({ items: [] }));
+    const playbook_yaml = "settings:\n  timeout: 300\ntest:\n  run: [echo x]\n";
+    await tools.runPlaybook({ playbook_yaml, wait: false });
+    await tools.runPlaybook({ playbook_yaml, timeout: 60, wait: false });
+    expect(post.mock.calls.map(([, body]) => (body as any).execution_timeout)).toEqual([300, 60]);
+  });
+
+  it("lists every execution of a run with count above 1", async () => {
+    const post = mockClient("post", () => ({ id: pid(1), status: "QUEUED" }));
+    const get = mockClient("get", () => ({ items: [{ id: pid(10) }, { id: pid(11) }, { id: pid(12) }] }));
+    const result = await tools.runPlaybook({ playbook_uri: "satori://a.yml", count: 3, wait: false });
+    expect((post.mock.calls[0][1] as any).count).toBe(3);
+    expect(get.mock.calls[0][1]).toMatchObject({ job_id: pid(1), quantity: 3 });
+    expect(result.execution_id).toBe(pid(10));
+    expect(result.execution_ids).toEqual([pid(10), pid(11), pid(12)]);
+  });
 });
 
 it("turns HTTP errors into error objects", async () => {
